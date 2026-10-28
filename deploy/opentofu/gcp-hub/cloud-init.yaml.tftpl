@@ -1,0 +1,57 @@
+#cloud-config
+# Rendered by the gcp-hub module. Runs the edge hub container on
+# Container-Optimized OS: the TLS files come from Secret Manager into tmpfs at
+# every start, and the container runs read-only, as a non-root user, with no
+# capabilities.
+write_files:
+  - path: /var/lib/edge-hub/config.yaml
+    permissions: "0644"
+    content: |
+      ${indent(6, config)}
+  - path: /var/lib/edge-hub/fetch-tls.sh
+    permissions: "0644"
+    content: |
+      set -euo pipefail
+      dir=/run/edge-hub
+      install -d -m 0750 -o 65532 -g 65532 "$dir" "$dir/tls"
+      token=$(curl -sSf -H 'Metadata-Flavor: Google' \
+        http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+        | tr -d ' \n' | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+      fetch() {
+        curl -sSf -H "Authorization: Bearer $token" \
+          "https://secretmanager.googleapis.com/v1/$1/versions/latest:access" \
+          | tr -d ' \n' | sed -E 's/.*"data":"([^"]+)".*/\1/' | base64 -d > "$2"
+      }
+      fetch '${ca_secret}' "$dir/tls/ca.crt"
+      fetch '${cert_secret}' "$dir/tls/tls.crt"
+      fetch '${key_secret}' "$dir/tls/tls.key"
+      cp /var/lib/edge-hub/config.yaml "$dir/config.yaml"
+      chown -R 65532:65532 "$dir"
+      chmod 0400 "$dir/tls/tls.key"
+  - path: /etc/systemd/system/edge-hub.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Instalily edge hub
+      Wants=network-online.target
+      After=network-online.target docker.service
+      Requires=docker.service
+
+      [Service]
+      ExecStartPre=/bin/bash /var/lib/edge-hub/fetch-tls.sh
+      ExecStartPre=-/usr/bin/docker rm -f edge-hub
+      ExecStart=/usr/bin/docker run --rm --name edge-hub --read-only --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --log-driver journald -v /run/edge-hub:/etc/edge-hub:ro ${port_flags} ${image} -config /etc/edge-hub/config.yaml
+      ExecStop=/usr/bin/docker stop edge-hub
+      Restart=always
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  # Container-Optimized OS drops inbound traffic by default; admit the hub's
+  # ports. The VPC firewall rules decide who may reach them.
+%{ for port in host_ports ~}
+  - iptables -w -A INPUT -p tcp --dport ${port} -j ACCEPT
+%{ endfor ~}
+  - systemctl daemon-reload
+  - systemctl start edge-hub.service

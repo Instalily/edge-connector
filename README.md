@@ -117,6 +117,15 @@ Both files are read strictly: a misspelled key is an error, not an ignored
 setting. Certificates are read again on every handshake, so a rotated
 certificate takes effect on the next connection without a restart.
 
+## Deploying a hub
+
+In GCP, next to the solution it serves, use the
+[`gcp-hub`](deploy/opentofu/gcp-hub) OpenTofu module. It runs a Compute Engine
+VM on Container-Optimized OS. Connectors reach the hub on a static external IP
+on TCP 443, and the solution reaches the endpoints on a static internal IP.
+Pin the module's `source` to a release tag, and its `image` to the same
+release's hub digest.
+
 ## Deploying the connector
 
 - **Kubernetes:** [`deploy/helm/edge-connector`](deploy/helm/edge-connector).
@@ -197,9 +206,8 @@ can reach. It checks that:
 - **TCP only.** No UDP.
 - **Logs only.** No Prometheus metrics yet: tunnel count, streams, bytes, and
   refusals by reason.
-- **Hub deployment.** Still to build. At first, hubs run in GCP next to the
-  solutions they serve: a Compute Engine VM running the hub image, with its
-  tunnel port behind a passthrough network load balancer and its endpoints on
-  internal IPs only. Later they move to the Platform clusters.
+- **Hub deployment outside GCP.** GCP hubs deploy with
+  [`deploy/opentofu/gcp-hub`](deploy/opentofu/gcp-hub). Hubs move to the
+  Platform clusters later, along with the solutions.
 - **VM image.** Still to build: a Packer image running the connector as a
   systemd unit, for customers without containers.
