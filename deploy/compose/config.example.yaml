@@ -1,0 +1,25 @@
+hub:
+  # Instalily provides your hub's address.
+  address: acme.connect.instalily.ai:443
+  connections: 2
+
+tls:
+  ca_file: /etc/edge-connector/tls/ca.crt
+  cert_file: /etc/edge-connector/tls/tls.crt
+  key_file: /etc/edge-connector/tls/tls.key
+
+# The only targets Instalily can reach. Only you can change this list.
+allow:
+  - host: sap-prd.corp.local
+    ports: [3300]
+  - host: "*.db.corp.local"
+    ports: [5432]
+  - cidr: 10.20.0.0/16
+    ports: [1433]
+
+limits:
+  max_streams: 256
+  dial_timeout: 10s
+
+# Local only, for the container healthcheck.
+health_listen: "127.0.0.1:8080"

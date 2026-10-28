@@ -1,0 +1,14 @@
+# This code runs inside customer networks. Every change needs a platform
+# review; the pieces that decide what the connector may reach, how the two
+# ends authenticate, and how CI runs need a cloud-admin.
+
+*                           @instalily/cloud-admins @instalily/cloud-engineers
+
+/.github/                   @instalily/cloud-admins
+/internal/allowlist/        @instalily/cloud-admins
+/internal/protocol/         @instalily/cloud-admins
+/internal/tlsconfig/        @instalily/cloud-admins
+/internal/pki/              @instalily/cloud-admins
+/Dockerfile                 @instalily/cloud-admins
+/go.mod                     @instalily/cloud-admins
+/go.sum                     @instalily/cloud-admins

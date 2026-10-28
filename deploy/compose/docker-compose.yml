@@ -1,0 +1,32 @@
+# The edge connector for hosts without Kubernetes.
+#
+# 1. Put the files Instalily sends you in ./tls: ca.crt, tls.crt, tls.key.
+#    The container runs as UID 65532, which must be able to read them.
+# 2. Copy config.example.yaml to config.yaml and fill in the hub address and
+#    your allowlist.
+# 3. docker compose run --rm connector -config /etc/edge-connector/config.yaml -check
+#    to see the allowlist the connector will enforce, then:
+#    docker compose up -d
+services:
+  connector:
+    image: ${EDGE_CONNECTOR_IMAGE:?set EDGE_CONNECTOR_IMAGE to the image Instalily provides}
+    command: ["-config", "/etc/edge-connector/config.yaml"]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      # Set if outbound traffic must go through a proxy.
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+    volumes:
+      - ./config.yaml:/etc/edge-connector/config.yaml:ro
+      - ./tls:/etc/edge-connector/tls:ro
+    healthcheck:
+      # Healthy while at least one tunnel to the hub is open.
+      test: ["CMD", "/usr/local/bin/edge-connector", "-probe", "http://127.0.0.1:8080/readyz"]
+      interval: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "5"

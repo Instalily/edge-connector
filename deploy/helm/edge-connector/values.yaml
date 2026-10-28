@@ -1,0 +1,70 @@
+# The connector only dials out: to the hub on TCP 443 (directly or through
+# your proxy), and to the targets in `allow`. It accepts no inbound
+# connections and has no Service.
+
+image:
+  # Required. Instalily provides the repository and tag.
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# Two replicas keep the tunnel up through node drains and upgrades.
+replicaCount: 2
+
+hub:
+  # Required. Instalily provides your hub's address.
+  address: ""
+  # The name verified on the hub's certificate; defaults to address's host.
+  serverName: ""
+  # Tunnels per replica.
+  connections: 2
+
+tls:
+  # Required. A Secret holding ca.crt (the CA that issued the hub's
+  # certificate) and tls.crt/tls.key (this connector's certificate).
+  existingSecret: ""
+
+# An http:// or https:// proxy for reaching the hub, e.g.
+# http://user:pass@proxy.corp.local:3128. Empty uses no proxy.
+proxy: ""
+
+# Required. The only targets Instalily can reach. Instalily cannot change
+# this list; only you can, by changing these values. Each entry is a `host`
+# (exact, or "*.suffix") or a `cidr` (a bare IP means one address), with its
+# ports. See the README for how names and addresses are matched.
+allow: []
+#  - host: sap-prd.corp.local
+#    ports: [3300]
+#  - cidr: 10.20.0.0/16
+#    ports: [5432]
+
+limits:
+  maxStreams: 256
+  dialTimeout: 10s
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}
+
+# Restrict the connector's egress with a NetworkPolicy. NetworkPolicies
+# match addresses, not names, so list the hub's and the targets' CIDRs.
+# DNS to kube-system is always allowed.
+networkPolicy:
+  enabled: false
+  egress: []
+  #  - cidr: 203.0.113.10/32   # the hub, or your proxy
+  #    ports: [443]
+  #  - cidr: 10.20.0.0/16
+  #    ports: [5432]

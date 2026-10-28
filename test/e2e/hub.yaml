@@ -1,0 +1,16 @@
+tunnel:
+  listen: ":8443"
+  tls:
+    ca_file: /pki/ca.crt
+    cert_file: /pki/hub.crt
+    key_file: /pki/hub.key
+  allowed_identities: [connector-1]
+endpoints:
+  - name: postgres
+    listen: ":5432"
+    target: postgres:5432
+  # Not on the connector's allowlist.
+  - name: postgres-other-port
+    listen: ":5433"
+    target: postgres:5433
+health_listen: ":8080"
