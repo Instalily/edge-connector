@@ -24,7 +24,16 @@ func Serve(ctx context.Context, addr string, ready func() bool, log *slog.Logger
 		}
 		w.Write([]byte("ok\n"))
 	})
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// Probes are tiny and quick, so tight timeouts cost nothing and keep a
+	// slow or idle client from holding connections open.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      5 * time.Second,
+		IdleTimeout:       30 * time.Second,
+	}
 	context.AfterFunc(ctx, func() {
 		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

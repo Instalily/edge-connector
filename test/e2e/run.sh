@@ -3,7 +3,7 @@
 # docker-compose.yml) and checks that a client can reach Postgres in the
 # customer network only through the hub, and only on an allowlisted port.
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || exit
 
 export E2E_UID E2E_GID E2E_PKI
 E2E_UID=$(id -u)
