@@ -2,17 +2,22 @@
 #
 # docker build --target connector -t edge-connector .
 # docker build --target hub -t edge-hub .
+# docker buildx build --platform linux/amd64,linux/arm64 --target connector .
 #
 # Both images are a static binary on distroless, running as a non-root user,
-# so customers' image scanners have next to nothing to report.
+# so customers' image scanners have next to nothing to report. The build
+# stage runs on the builder's own platform and cross-compiles, so multi-arch
+# images need no emulation.
 
-FROM golang:1.26.10 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.10 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/...
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/...
 
 FROM gcr.io/distroless/static-debian12:nonroot AS hub
 COPY --from=build /out/hub /usr/local/bin/edge-hub

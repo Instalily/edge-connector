@@ -3,7 +3,9 @@
 # connections and has no Service.
 
 image:
-  # Required. Instalily provides the repository and tag.
+  # Required. The ECR Public repository and a release tag from Instalily.
+  # Prefer a digest ("sha256:...") in tag, verified with cosign; see the
+  # repository's README.
   repository: ""
   tag: ""
   pullPolicy: IfNotPresent
