@@ -1,0 +1,10 @@
+hub:
+  address: hub.test:8443
+tls:
+  ca_file: /pki/ca.crt
+  cert_file: /pki/connector-1.crt
+  key_file: /pki/connector-1.key
+allow:
+  - host: postgres
+    ports: [5432]
+health_listen: "127.0.0.1:8080"

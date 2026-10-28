@@ -1,0 +1,70 @@
+# Three networks stand in for three places. Postgres lives in "customer",
+# which only the connector reaches. The connector and hub meet on "wan", the
+# internet. The client lives in "instalily", which only the hub reaches.
+# run.sh drives it.
+name: edge-connector-e2e
+
+networks:
+  customer:
+    internal: true
+  wan: {}
+  instalily:
+    internal: true
+
+x-hardened: &hardened
+  user: "${E2E_UID:?}:${E2E_GID:?}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: e2e
+    networks: [customer]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      retries: 30
+
+  connector:
+    <<: *hardened
+    build:
+      context: ../..
+      target: connector
+    command: ["-config", "/etc/edge-connector/config.yaml"]
+    volumes:
+      - ./connector.yaml:/etc/edge-connector/config.yaml:ro
+      - ${E2E_PKI:?}:/pki:ro
+    networks: [customer, wan]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/edge-connector", "-probe", "http://127.0.0.1:8080/readyz"]
+      interval: 1s
+      retries: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  hub:
+    <<: *hardened
+    build:
+      context: ../..
+      target: hub
+    command: ["-config", "/etc/edge-hub/config.yaml"]
+    volumes:
+      - ./hub.yaml:/etc/edge-hub/config.yaml:ro
+      - ${E2E_PKI:?}:/pki:ro
+    networks:
+      wan:
+        aliases: [hub.test]
+      instalily: {}
+
+  client:
+    image: postgres:17-alpine
+    environment:
+      PGPASSWORD: e2e
+      PGUSER: postgres
+      PGCONNECT_TIMEOUT: "5"
+    networks: [instalily]
+    profiles: [client]

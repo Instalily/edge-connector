@@ -1,0 +1,19 @@
+# Values CI renders the chart with. Every optional feature is on.
+image:
+  repository: example.com/edge-connector
+  tag: 0.1.0
+hub:
+  address: acme.connect.instalily.ai:443
+tls:
+  existingSecret: edge-connector-tls
+proxy: http://proxy.corp.local:3128
+allow:
+  - host: sap-prd.corp.local
+    ports: [3300]
+  - cidr: 10.20.0.0/16
+    ports: [5432]
+networkPolicy:
+  enabled: true
+  egress:
+    - cidr: 203.0.113.10/32
+      ports: [443]
