@@ -139,6 +139,35 @@ The connector needs `ca.crt`, `connector-1.crt` and `connector-1.key`. The hub
 needs `ca.crt`, `hub.crt` and `hub.key`. Keep `ca.key` in Instalily's secrets
 store, never in a customer's environment.
 
+## Releases
+
+A cloud-admin cuts a release by pushing a `vMAJOR.MINOR.PATCH` tag on a `main`
+commit. Only cloud-admins can create `v*` tags. [`release.yml`](.github/workflows/release.yml)
+then:
+
+1. Reruns all of CI on the tagged commit.
+2. Pushes multi-arch (linux/amd64, linux/arm64) `edge-connector` and `edge-hub`
+   images to ECR Public, with SBOM and provenance attestations. It refuses to
+   overwrite an existing tag, since ECR Public tags are mutable.
+3. Signs each image digest with cosign (keyless, through GitHub's OIDC
+   identity).
+4. Publishes a GitHub release with the pinned image references, the
+   `cosign verify` command, and static `edge-connector` and `edgectl` binaries
+   for linux/amd64, linux/arm64 and windows/amd64, with `SHA256SUMS`.
+
+Deploy by digest, not by tag, and verify the signature first:
+
+```bash
+cosign verify \
+  --certificate-identity 'https://github.com/Instalily/edge-connector/.github/workflows/release.yml@refs/tags/vX.Y.Z' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  public.ecr.aws/<alias>/edge-connector@sha256:<digest>
+```
+
+Only the release environment's identity can push these images. Instalily's
+infra repository holds the repositories, the publisher role and the
+release-tag rules.
+
 ## Development
 
 ```bash
@@ -168,10 +197,9 @@ can reach. It checks that:
 - **TCP only.** No UDP.
 - **Logs only.** No Prometheus metrics yet: tunnel count, streams, bytes, and
   refusals by reason.
-- **Release pipeline.** Still to build: CI, signed images (cosign), an SBOM,
-  and published versions customers can pin.
-- **Hub deployment.** Still to build: an OpenTofu module in `Instalily/infra`
-  for client workload accounts, with an NLB passing TLS through to the hub,
-  and per-endpoint Services for our workloads.
+- **Hub deployment.** Still to build. At first, hubs run in GCP next to the
+  solutions they serve: a Compute Engine VM running the hub image, with its
+  tunnel port behind a passthrough network load balancer and its endpoints on
+  internal IPs only. Later they move to the Platform clusters.
 - **VM image.** Still to build: a Packer image running the connector as a
   systemd unit, for customers without containers.

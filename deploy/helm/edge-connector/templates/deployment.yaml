@@ -55,7 +55,8 @@ spec:
       {{- end }}
       containers:
         - name: connector
-          image: "{{ required "image.repository is required" .Values.image.repository }}:{{ required "image.tag is required" .Values.image.tag }}"
+          {{- $tag := required "image.tag is required" .Values.image.tag }}
+          image: "{{ required "image.repository is required" .Values.image.repository }}{{ if hasPrefix "sha256:" $tag }}@{{ else }}:{{ end }}{{ $tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["-config", "/etc/edge-connector/config.yaml"]
           {{- if .Values.proxy }}
