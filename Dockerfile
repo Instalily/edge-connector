@@ -6,7 +6,7 @@
 # Both images are a static binary on distroless, running as a non-root user,
 # so customers' image scanners have next to nothing to report.
 
-FROM golang:1.26 AS build
+FROM golang:1.26.10 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
