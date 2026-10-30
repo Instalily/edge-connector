@@ -135,6 +135,40 @@ run "firewall_admits_tunnel_endpoints_and_health_checks_only" {
   }
 }
 
+# Apply, with distinct IDs for the two health checks, which the mock provider
+# would otherwise give the same one.
+run "endpoints_wait_for_a_tunnel_and_rollouts_do_not_drain" {
+  command = apply
+
+  override_resource {
+    target = google_compute_region_health_check.hub
+    values = { id = "projects/acme-solution/regions/us-central1/healthChecks/edge-hub-acme-lb" }
+  }
+
+  override_resource {
+    target = google_compute_region_health_check.ready
+    values = { id = "projects/acme-solution/regions/us-central1/healthChecks/edge-hub-acme-ready" }
+  }
+
+  assert {
+    condition = (
+      google_compute_region_health_check.hub.http_health_check[0].request_path == "/healthz" &&
+      google_compute_region_health_check.ready.http_health_check[0].request_path == "/readyz" &&
+      google_compute_region_backend_service.tunnel.health_checks == toset([google_compute_region_health_check.hub.id]) &&
+      google_compute_region_backend_service.endpoints.health_checks == toset([google_compute_region_health_check.ready.id])
+    )
+    error_message = "The tunnel load balancer must check /healthz, and the endpoints load balancer /readyz, so endpoints go only to a hub with a connector attached."
+  }
+
+  assert {
+    condition = (
+      google_compute_region_backend_service.tunnel.connection_draining_timeout_sec == 0 &&
+      google_compute_region_backend_service.endpoints.connection_draining_timeout_sec == 0
+    )
+    error_message = "Neither backend may drain, or a rollout keeps connectors on the old VM while endpoints go to the new one."
+  }
+}
+
 run "rejects_a_tag_instead_of_a_digest" {
   command = plan
   variables {
