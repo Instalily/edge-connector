@@ -23,7 +23,9 @@ Compute Engine VM on Container-Optimized OS, in the solution's own VPC.
   balancer on TCP 443. TLS ends at the hub, so it sees each connector's
   certificate.
 - **Endpoints:** a static internal IP with an internal passthrough load
-  balancer, one port per endpoint.
+  balancer, one port per endpoint. It sends connections only to a hub with a
+  connector attached (`/readyz`), so during a rollout they wait for the
+  connectors to move to the new VM instead of failing on it.
 - **Firewall:**
   - 443 from `tunnel_source_ranges`;
   - the endpoint ports from `endpoint_source_ranges` only;
@@ -46,17 +48,19 @@ Compute Engine VM on Container-Optimized OS, in the solution's own VPC.
 
 With enrollment (recommended), the hub CA's key and the token signing key stay
 in Instalily's secret store. Only the connector CA's key goes to the hub, so
-it can sign connector certificates:
+it can sign connector certificates. Replicate the secrets in the hub's region:
+the default, automatic replication is `global`, which organization policies
+that restrict resource locations reject.
 
 ```bash
 edgectl ca -name acme -prefix hub-ca -out pki/
 edgectl ca -name acme -prefix connector-ca -out pki/
 edgectl issue -ca pki/ -ca-prefix hub-ca -name hub -ip <tunnel_ip> -server -out pki/
-gcloud secrets create edge-hub-connector-ca     --data-file=pki/connector-ca.crt
-gcloud secrets create edge-hub-connector-ca-key --data-file=pki/connector-ca.key
-gcloud secrets create edge-hub-cert             --data-file=pki/hub.crt   # the hub's certificate, then the hub CA
-gcloud secrets create edge-hub-key              --data-file=pki/hub.key
-gcloud secrets create edge-hub-hub-ca           --data-file=pki/hub-ca.crt
+gcloud secrets create edge-hub-connector-ca     --data-file=pki/connector-ca.crt --replication-policy=user-managed --locations=us-central1
+gcloud secrets create edge-hub-connector-ca-key --data-file=pki/connector-ca.key --replication-policy=user-managed --locations=us-central1
+gcloud secrets create edge-hub-cert             --data-file=pki/hub.crt          --replication-policy=user-managed --locations=us-central1   # the hub's certificate, then the hub CA
+gcloud secrets create edge-hub-key              --data-file=pki/hub.key          --replication-policy=user-managed --locations=us-central1
+gcloud secrets create edge-hub-hub-ca           --data-file=pki/hub-ca.crt       --replication-policy=user-managed --locations=us-central1
 ```
 
 ```hcl
@@ -98,6 +102,9 @@ which rolls out a new VM.
 
 ## Limits
 
-- One VM, so a zone outage or a VM replacement interrupts tunnels until
-  connectors reconnect, typically within a minute.
+- One VM, so a zone outage interrupts tunnels until the VM is back. A
+  rollout or a replacement interrupts them only until connectors reconnect to
+  the new VM, about a second after the old one stops. Endpoint connections
+  fail for a few seconds more, until the load balancer sees the new VM's
+  tunnels: about 6 seconds in testing.
 - Endpoint ports 22, 443 and 8080 are reserved by the VM.

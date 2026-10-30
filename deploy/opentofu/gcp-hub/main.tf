@@ -211,6 +211,24 @@ resource "google_compute_region_health_check" "hub" {
   }
 }
 
+# Endpoints go only to a hub with a connector attached. During a rollout the
+# new VM has none until the old one stops, and without this the internal load
+# balancer sends it nearly every new connection, which fails.
+resource "google_compute_region_health_check" "ready" {
+  project             = var.project_id
+  region              = var.region
+  name                = "${local.name}-ready"
+  check_interval_sec  = 5
+  timeout_sec         = 5
+  healthy_threshold   = 2
+  unhealthy_threshold = 2
+
+  http_health_check {
+    port         = local.health_port
+    request_path = "/readyz"
+  }
+}
+
 # --- Tunnel: external passthrough network load balancer on TCP 443 -------------
 
 resource "google_compute_address" "tunnel" {
@@ -228,6 +246,11 @@ resource "google_compute_region_backend_service" "tunnel" {
   load_balancing_scheme = "EXTERNAL"
   protocol              = "TCP"
   health_checks         = [google_compute_region_health_check.hub.id]
+
+  # Tunnels last as long as the VM, so draining only keeps a replaced VM, and
+  # the connectors on it, around for nothing. Without it, connectors move to
+  # the new VM as soon as the old one stops.
+  connection_draining_timeout_sec = 0
 
   backend {
     group          = google_compute_instance_group_manager.hub.instance_group
@@ -265,7 +288,10 @@ resource "google_compute_region_backend_service" "endpoints" {
   load_balancing_scheme = "INTERNAL"
   protocol              = "TCP"
   network               = var.network
-  health_checks         = [google_compute_region_health_check.hub.id]
+  health_checks         = [google_compute_region_health_check.ready.id]
+
+  # Endpoint connections run through the old VM's tunnels, which end with it.
+  connection_draining_timeout_sec = 0
 
   backend {
     group          = google_compute_instance_group_manager.hub.instance_group
