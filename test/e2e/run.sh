@@ -25,6 +25,10 @@ cleanup() {
 trap cleanup EXIT
 
 pass() { printf 'PASS  %s\n' "$*"; }
+# Whether the connector logged a line matching $1. grep reads the whole log:
+# "grep -q" stops at the first match, and under pipefail the SIGPIPE that
+# kills "compose logs" would fail the check.
+connector_logged() { compose logs connector | grep -- "$1" >/dev/null; }
 fail() { printf 'FAIL  %s\n' "$*"; exit 1; }
 client() { compose run --rm --no-deps -T client "$@"; }
 
@@ -44,7 +48,7 @@ compose run --rm --no-deps -T -v "$E2E_PKI:/out" --entrypoint /usr/local/bin/edg
 chmod 0644 "$E2E_PKI/token"
 
 compose up --detach --wait postgres hub connector
-compose logs connector | grep -q '"msg":"enrolled"' || fail "connector did not enroll"
+connector_logged '"msg":"enrolled"' || fail "connector did not enroll"
 pass "connector enrolls with the token, as its own non-root user"
 
 out=$(client psql -h hub -tAc "select 'through the tunnel'")
@@ -58,7 +62,7 @@ pass "bulk copy of $bytes bytes arrives intact"
 if client psql -h hub -p 5433 -tAc 'select 1' >/dev/null 2>&1; then
   fail "a target off the allowlist was reachable"
 fi
-compose logs connector | grep -q '"reason":"denied"' || fail "connector did not log the denial"
+connector_logged '"reason":"denied"' || fail "connector did not log the denial"
 pass "target off the allowlist is refused, and the connector logs it"
 
 if client pg_isready -h postgres -t 3 >/dev/null 2>&1; then
@@ -69,7 +73,7 @@ pass "client cannot reach the customer network directly"
 # A new container, the same state volume, and no token.
 : > "$E2E_PKI/token"
 compose up --detach --wait --force-recreate --no-deps connector
-compose logs connector | grep -q '"msg":"using enrolled certificate"' || fail "recreated connector did not reuse its state"
+connector_logged '"msg":"using enrolled certificate"' || fail "recreated connector did not reuse its state"
 out=$(client psql -h hub -tAc "select 'after restart'")
 [ "$out" = "after restart" ] || fail "query after restart returned: $out"
 pass "recreated connector reconnects from its state volume without the token"
