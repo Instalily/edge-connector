@@ -17,6 +17,7 @@ import (
 
 	"github.com/hashicorp/yamux"
 
+	"github.com/Instalily/edge-connector/internal/enroll"
 	"github.com/Instalily/edge-connector/internal/pipe"
 	"github.com/Instalily/edge-connector/internal/protocol"
 	"github.com/Instalily/edge-connector/internal/tlsconfig"
@@ -46,6 +47,7 @@ type Hub struct {
 	cfg       *Config
 	log       *slog.Logger
 	tls       *tls.Config
+	issuer    *issuer // nil without enrollment
 	tunnelLn  net.Listener
 	endpoints []*endpoint
 
@@ -61,6 +63,12 @@ func New(cfg *Config, log *slog.Logger) (_ *Hub, err error) {
 		return nil, err
 	}
 	h := &Hub{cfg: cfg, log: log, tls: tc}
+	if cfg.Enrollment != nil {
+		if h.issuer, err = newIssuer(cfg.Tunnel.TLS.CAFile, cfg.Enrollment); err != nil {
+			return nil, err
+		}
+		h.tls = withEnrollment(tc)
+	}
 	defer func() {
 		if err != nil {
 			h.closeListeners()
@@ -144,14 +152,30 @@ func (h *Hub) handleTunnel(ctx context.Context, raw net.Conn) {
 		return
 	}
 	st := conn.ConnectionState()
-	identity := st.PeerCertificates[0].Subject.CommonName
-	log = log.With("identity", identity)
-	if st.NegotiatedProtocol != protocol.ALPN {
-		log.Warn("tunnel rejected", "error", fmt.Sprintf("protocol %q", st.NegotiatedProtocol))
+	// Enrollment is the one protocol whose client has no certificate yet.
+	if st.NegotiatedProtocol == enroll.ALPNEnroll && h.issuer != nil {
+		defer conn.Close()
+		h.handleEnroll(conn, log)
+		return
+	}
+	if len(st.PeerCertificates) == 0 {
+		log.Warn("tunnel rejected", "error", "no client certificate")
 		conn.Close()
 		return
 	}
-	if ids := h.cfg.Tunnel.AllowedIdentities; len(ids) > 0 && !slices.Contains(ids, identity) {
+	leaf := st.PeerCertificates[0]
+	identity := leaf.Subject.CommonName
+	log = log.With("identity", identity)
+	switch {
+	case st.NegotiatedProtocol == enroll.ALPNRenew && h.issuer != nil:
+		defer conn.Close()
+		h.handleRenew(conn, log, identity)
+		return
+	case st.NegotiatedProtocol != protocol.ALPN:
+		log.Warn("tunnel rejected", "error", fmt.Sprintf("protocol %q", st.NegotiatedProtocol))
+		conn.Close()
+		return
+	case !h.identityAllowed(identity):
 		log.Warn("tunnel rejected", "error", "identity not allowed")
 		conn.Close()
 		return
@@ -165,7 +189,15 @@ func (h *Hub) handleTunnel(ctx context.Context, raw net.Conn) {
 	h.add(t)
 	defer h.remove(t)
 	defer sess.Close()
-	log.Info("tunnel up")
+	log.Info("tunnel up", "certificate_expires", leaf.NotAfter.UTC().Format(time.RFC3339))
+
+	// A tunnel lasts no longer than the certificate that opened it. The
+	// connector reconnects with its renewed one.
+	expiry := time.AfterFunc(time.Until(leaf.NotAfter), func() {
+		log.Info("certificate expired; closing tunnel")
+		sess.Close()
+	})
+	defer expiry.Stop()
 
 	// Streams flow only from the hub to the connector. A connector that
 	// opens one is misbehaving or compromised: drop its tunnel.

@@ -44,9 +44,13 @@ func New(cfg *Config, log *slog.Logger) (*Connector, error) {
 	if err != nil {
 		return nil, err
 	}
-	tc, err := tlsconfig.Client(cfg.TLS, cfg.Hub.ServerName)
-	if err != nil {
-		return nil, err
+	// An enrolling connector may have no certificate yet; Run builds its TLS
+	// configuration once it does.
+	var tc *tls.Config
+	if !cfg.Enrolls() {
+		if tc, err = tlsconfig.Client(cfg.TLS, cfg.Hub.ServerName); err != nil {
+			return nil, err
+		}
 	}
 	var p *url.URL
 	if cfg.Proxy != "" {
@@ -76,9 +80,23 @@ func (c *Connector) Proxy() *url.URL { return c.proxy }
 // Ready reports whether at least one tunnel is open.
 func (c *Connector) Ready() bool { return c.tunnels.Load() > 0 }
 
-// Run keeps the configured number of tunnels open until ctx ends.
+// Run keeps the configured number of tunnels open until ctx ends. An
+// enrolling connector first enrolls, if it has no valid certificate, and
+// keeps renewing it.
 func (c *Connector) Run(ctx context.Context) {
 	var wg sync.WaitGroup
+	if c.cfg.Enrolls() {
+		if !c.enrollUntilDone(ctx) {
+			return
+		}
+		tc, err := tlsconfig.Client(c.state().Files(), c.cfg.Hub.ServerName)
+		if err != nil {
+			c.log.Error("cannot use enrolled certificate", "error", err)
+			return
+		}
+		c.tls = tc
+		wg.Go(func() { c.renewLoop(ctx) })
+	}
 	for slot := range c.cfg.Hub.Connections {
 		wg.Go(func() { c.maintain(ctx, slot) })
 	}
@@ -113,8 +131,7 @@ func (c *Connector) maintain(ctx context.Context, slot int) {
 func (c *Connector) tunnel(ctx context.Context, slot int) error {
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	d := &net.Dialer{KeepAlive: 30 * time.Second}
-	raw, err := proxy.Dial(dctx, d, c.proxy, c.cfg.Hub.Address)
+	raw, err := c.dialHub(dctx, c.cfg.Hub.Address)
 	if err != nil {
 		return fmt.Errorf("dial hub: %w", err)
 	}

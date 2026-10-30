@@ -52,14 +52,24 @@ func NewCA(name string, validity time.Duration) (*Pair, error) {
 	return sign(tmpl, tmpl, &key.PublicKey, key, key)
 }
 
-// Issue signs a new leaf certificate with ca.
+// Issue signs a new leaf certificate, with a new key, with ca.
 func (ca *Pair) Issue(o LeafOptions) (*Pair, error) {
-	if !o.Server && !o.Client {
-		return nil, errors.New("pki: a certificate must be for a server, a client, or both")
-	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
+	}
+	cert, err := ca.IssueFor(&key.PublicKey, o)
+	if err != nil {
+		return nil, err
+	}
+	return &Pair{Cert: cert, Key: key}, nil
+}
+
+// IssueFor signs a leaf certificate for a key the caller holds, such as one
+// from a certificate request.
+func (ca *Pair) IssueFor(pub *ecdsa.PublicKey, o LeafOptions) (*x509.Certificate, error) {
+	if !o.Server && !o.Client {
+		return nil, errors.New("pki: a certificate must be for a server, a client, or both")
 	}
 	tmpl, err := template(o.CommonName, o.Validity)
 	if err != nil {
@@ -74,17 +84,48 @@ func (ca *Pair) Issue(o LeafOptions) (*Pair, error) {
 	if o.Client {
 		tmpl.ExtKeyUsage = append(tmpl.ExtKeyUsage, x509.ExtKeyUsageClientAuth)
 	}
-	return sign(tmpl, ca.Cert, &key.PublicKey, ca.Key, key)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, pub, ca.Key)
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
+}
+
+// CertPEM encodes a certificate as PEM.
+func CertPEM(c *x509.Certificate) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw})
+}
+
+// KeyPEM encodes an ECDSA key as PKCS #8 PEM.
+func KeyPEM(k *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(k)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
+}
+
+// LoadCert reads the first certificate in a PEM file.
+func LoadCert(path string) (*x509.Certificate, error) {
+	der, err := readPEM(path, "CERTIFICATE")
+	if err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(der)
 }
 
 // Write saves the certificate and key as PEM. Only the owner can read the key.
-func (p *Pair) Write(certFile, keyFile string) error {
-	der, err := x509.MarshalPKCS8PrivateKey(p.Key)
+// Any chain certificates follow the certificate in certFile, so the peer can
+// see which CA issued it.
+func (p *Pair) Write(certFile, keyFile string, chain ...*x509.Certificate) error {
+	keyPEM, err := KeyPEM(p.Key)
 	if err != nil {
 		return err
 	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: p.Cert.Raw})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	certPEM := CertPEM(p.Cert)
+	for _, c := range chain {
+		certPEM = append(certPEM, CertPEM(c)...)
+	}
 	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
 		return err
 	}
@@ -128,8 +169,10 @@ func template(cn string, validity time.Duration) (*x509.Certificate, error) {
 	return &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: cn},
-		// Tolerate clock skew between the issuing host and the peers.
-		NotBefore: now.Add(-5 * time.Minute),
+		// Tolerate clock skew between the issuing host and the peers, by no
+		// more than a tenth of the validity, so renewal timing based on
+		// NotBefore stays close to the issue time.
+		NotBefore: now.Add(-min(5*time.Minute, validity/10)),
 		NotAfter:  now.Add(validity),
 	}, nil
 }

@@ -6,6 +6,8 @@
 
 /.github/                   @instalily/cloud-admins
 /internal/allowlist/        @instalily/cloud-admins
+/internal/enroll/           @instalily/cloud-admins
+/internal/hub/enroll.go     @instalily/cloud-admins
 /internal/protocol/         @instalily/cloud-admins
 /internal/tlsconfig/        @instalily/cloud-admins
 /internal/pki/              @instalily/cloud-admins

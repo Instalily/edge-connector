@@ -52,7 +52,13 @@ func main() {
 		fail(log, err)
 	}
 	if *check {
-		fmt.Printf("configuration OK\nhub: %s (verifying %s)\nallow:\n", cfg.Hub.Address, cfg.Hub.ServerName)
+		fmt.Printf("configuration OK\nhub: %s (verifying %s)\n", cfg.Hub.Address, cfg.Hub.ServerName)
+		if cfg.Enrolls() {
+			fmt.Printf("certificate: enrolled, kept in %s\n", cfg.StateDir)
+		} else {
+			fmt.Printf("certificate: %s\n", cfg.TLS.CertFile)
+		}
+		fmt.Println("allow:")
 		for _, r := range c.Rules() {
 			fmt.Println("  " + r)
 		}

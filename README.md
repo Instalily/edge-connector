@@ -35,10 +35,14 @@ These are the properties a customer's security review will ask about.
   open one, the hub drops its tunnel. Instalily's network is never reachable
   from the customer's side.
 - **Mutual authentication.** TLS 1.3 only, and both sides present
-  certificates. Each customer has its own CA. A hub accepts only connectors
-  whose certificates that CA issued, optionally only named ones
-  (`allowed_identities`). Connectors verify the hub's certificate against the
-  same CA. The protocol version is negotiated with ALPN.
+  certificates. Each customer has its own CAs: a hub accepts only connectors
+  whose certificates its connector CA issued, optionally only named ones
+  (`allowed_identities`), and connectors verify the hub against its hub CA.
+  The protocol version is negotiated with ALPN.
+- **Keys stay where they're used.** An enrolling connector generates its own
+  key, and Instalily never sees it. Its certificates last 7 days and renew
+  automatically, and a tunnel never outlives the certificate that opened it.
+  See [Certificates and enrollment](#certificates-and-enrollment).
 - **Local audit trail.** The connector logs every stream as JSON on stdout:
   target, outcome, resolved address, bytes each way, duration. These logs stay
   in the customer's environment.
@@ -81,10 +85,14 @@ hub:
   address: acme.connect.instalily.ai:443
   server_name: ""        # name to verify on the hub's certificate; defaults to address's host
   connections: 2         # tunnels to keep open
-tls:
-  ca_file: /etc/edge-connector/tls/ca.crt     # the CA that issued the hub's certificate
-  cert_file: /etc/edge-connector/tls/tls.crt  # this connector's certificate
-  key_file: /etc/edge-connector/tls/tls.key
+state_dir: /var/lib/edge-connector         # enrolled key, certificate and hub CA; must persist
+enrollment:
+  token_file: /etc/edge-connector/token    # needed only until the first enrollment
+# Or, with certificates issued by hand, instead of state_dir and enrollment:
+# tls:
+#   ca_file: /etc/edge-connector/tls/ca.crt     # the hub CA
+#   cert_file: /etc/edge-connector/tls/tls.crt  # this connector's certificate
+#   key_file: /etc/edge-connector/tls/tls.key
 proxy: ""                # http:// or https:// proxy; empty uses HTTPS_PROXY / NO_PROXY
 allow:
   - host: sap-prd.corp.local
@@ -101,10 +109,15 @@ Hub (Instalily-owned, one per customer):
 tunnel:
   listen: ":8443"
   tls:
-    ca_file: /etc/edge-hub/tls/ca.crt     # the customer's CA, which issues connector certificates
-    cert_file: /etc/edge-hub/tls/tls.crt  # the hub's certificate
+    ca_file: /etc/edge-hub/tls/connector-ca.crt   # the connector CA
+    cert_file: /etc/edge-hub/tls/tls.crt          # the hub's certificate, then the hub CA
     key_file: /etc/edge-hub/tls/tls.key
-  allowed_identities: [connector-1]       # optional: certificate common names
+  allowed_identities: [connector-1]               # optional: certificate common names
+enrollment:                                       # optional: lets connectors enroll and renew
+  ca_key_file: /etc/edge-hub/tls/connector-ca.key
+  hub_ca_file: /etc/edge-hub/tls/hub-ca.crt
+  token_keys_file: /etc/edge-hub/token.pub        # one or more Ed25519 public keys
+  certificate_lifetime: 168h
 endpoints:
   - name: sap
     listen: ":3300"
@@ -134,19 +147,102 @@ release's hub digest.
   pods. An optional NetworkPolicy limits egress to DNS plus the CIDRs you list.
 - **Docker / VM:** [`deploy/compose`](deploy/compose).
 
-## Issuing certificates
+## Certificates and enrollment
 
-Until connectors enroll themselves, `edgectl` issues certificates by hand:
+Each customer has two CAs:
+
+- **Hub CA:** signs only the hub's certificate, and connectors trust it. Its
+  key stays in Instalily's secret store.
+- **Connector CA:** signs connector certificates, and the hub trusts it. The
+  hub holds its key so it can issue and renew them.
+
+Someone who takes the hub's key can mint connector identities. That gains
+nothing, because those identities only authenticate to that hub. They can't
+mint a hub certificate to impersonate the hub to connectors.
+
+### Enrollment
+
+Connectors get their own certificates:
+
+1. Instalily gives the customer a **token**: a short string naming the
+   connector's identity and the hub's CA, signed by Instalily, and valid for
+   at most 7 days (24 hours by default). Until it expires it can enroll more
+   than one replica, so treat it as a secret.
+2. The connector generates its own key, which never leaves it. It connects to
+   the hub (ALPN `edge-enroll/1`, no client certificate), checks that the
+   hub's certificate chains to the CA the token names, and sends the token
+   and a certificate request.
+3. The hub checks the token's signature and expiry, that it names this hub's
+   CA, and that `allowed_identities` (if set) includes the identity. It then
+   returns a **7-day** certificate whose name comes from the token, not the
+   request.
+4. The connector keeps the certificate, its key and the hub's CA in
+   `state_dir`, which must persist across restarts. After that it needs no
+   token.
+5. At two thirds of the certificate's lifetime, the connector renews it with
+   a new key, authenticating with the current certificate (ALPN
+   `edge-renew/1`). The hub closes any tunnel whose certificate has expired,
+   and the connector reconnects with the new one.
+
+A connector offline for longer than its certificate lasts needs a new token.
+To revoke a connector, remove its identity from `allowed_identities`: the hub
+then refuses its tunnels and renewals.
+
+### Operator steps
+
+Once per customer, keeping every `.key` in Instalily's secret store:
 
 ```bash
-edgectl ca -name acme -out pki/
-edgectl issue -ca pki/ -name hub -dns acme.connect.instalily.ai -server -out pki/
-edgectl issue -ca pki/ -name connector-1 -client -out pki/
+edgectl ca -name acme -prefix hub-ca -out pki/
+edgectl ca -name acme -prefix connector-ca -out pki/
+edgectl issue -ca pki/ -ca-prefix hub-ca -name hub -dns acme.connect.instalily.ai -server -out pki/
 ```
 
-The connector needs `ca.crt`, `connector-1.crt` and `connector-1.key`. The hub
-needs `ca.crt`, `hub.crt` and `hub.key`. Keep `ca.key` in Instalily's secrets
-store, never in a customer's environment.
+`hub.crt` holds the hub's certificate followed by the hub CA, which connectors
+pin. The hub needs:
+
+- `hub.crt` and `hub.key` as `tunnel.tls.cert_file` and `key_file`;
+- `connector-ca.crt` as `tunnel.tls.ca_file`;
+- `connector-ca.key` as `enrollment.ca_key_file`;
+- `hub-ca.crt` as `enrollment.hub_ca_file`;
+- `token.pub` as `enrollment.token_keys_file`.
+
+Once, for all customers:
+
+```bash
+edgectl token-key -out pki/   # token.key signs tokens; token.pub goes to hubs
+```
+
+For each connector, a token to send the customer:
+
+```bash
+edgectl token -key pki/token.key -hub-ca pki/hub-ca.crt -identity connector-1 -expires 24h
+```
+
+The customer's configuration then has no `tls` section:
+
+```yaml
+hub:
+  address: acme.connect.instalily.ai:443
+state_dir: /var/lib/edge-connector
+enrollment:
+  token_file: /etc/edge-connector/token
+allow:
+  - host: sap-prd.corp.local
+    ports: [3300]
+```
+
+### Certificates by hand
+
+Connectors can still use certificates issued by hand, through `tls` in their
+configuration instead of `state_dir`:
+
+```bash
+edgectl issue -ca pki/ -ca-prefix connector-ca -name connector-1 -client -out pki/
+```
+
+These aren't renewed automatically. The hub closes a tunnel when its
+certificate expires, just as it does for enrolled connectors.
 
 ## Releases
 
@@ -200,9 +296,9 @@ can reach. It checks that:
 - **One hub replica per customer.** A connection to an endpoint must land on
   the replica that holds a tunnel. Running several replicas needs either
   connectors that dial every replica, or replicas that route to each other.
-- **Manual certificates.** Next is enrollment: a one-time token, a key that
-  never leaves the connector, and short-lived certificates renewed
-  automatically.
+- **Enrollment packaging.** The Helm chart, compose file and gcp-hub module
+  still use certificates issued by hand. Next: a StatefulSet with a state
+  volume, a compose state volume, and enrollment inputs for the hub module.
 - **TCP only.** No UDP.
 - **Logs only.** No Prometheus metrics yet: tunnel count, streams, bytes, and
   refusals by reason.
