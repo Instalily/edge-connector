@@ -1,4 +1,4 @@
-# Values CI renders the chart with. Every optional feature is on.
+# Certificates issued by hand, with every optional feature on.
 image:
   repository: example.com/edge-connector
   tag: 0.1.0

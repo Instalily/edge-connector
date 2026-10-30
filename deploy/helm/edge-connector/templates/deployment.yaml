@@ -1,15 +1,5 @@
-{{- if .Values.proxy }}
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ include "edge-connector.fullname" . }}-proxy
-  labels:
-    {{- include "edge-connector.labels" . | nindent 4 }}
-type: Opaque
-stringData:
-  HTTPS_PROXY: {{ .Values.proxy | quote }}
----
-{{- end }}
+{{- if not (include "edge-connector.enrolls" .) }}
+# Certificates issued by hand: replicas share them, so a Deployment will do.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,95 +16,5 @@ spec:
       maxUnavailable: 0
       maxSurge: 1
   template:
-    metadata:
-      annotations:
-        # Roll the pods when the allowlist or other configuration changes.
-        checksum/config: {{ include "edge-connector.config" . | sha256sum }}
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-      labels:
-        {{- include "edge-connector.selectorLabels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
-    spec:
-      # The connector never calls the Kubernetes API.
-      automountServiceAccountToken: false
-      enableServiceLinks: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
-      {{- with .Values.imagePullSecrets }}
-      imagePullSecrets:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      containers:
-        - name: connector
-          {{- $tag := required "image.tag is required" .Values.image.tag }}
-          image: "{{ required "image.repository is required" .Values.image.repository }}{{ if hasPrefix "sha256:" $tag }}@{{ else }}:{{ end }}{{ $tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["-config", "/etc/edge-connector/config.yaml"]
-          {{- if .Values.proxy }}
-          envFrom:
-            - secretRef:
-                name: {{ include "edge-connector.fullname" . }}-proxy
-          {{- end }}
-          ports:
-            - name: health
-              containerPort: 8080
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: health
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: health
-            periodSeconds: 5
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-          volumeMounts:
-            - name: config
-              mountPath: /etc/edge-connector/config.yaml
-              subPath: config.yaml
-              readOnly: true
-            - name: tls
-              mountPath: /etc/edge-connector/tls
-              readOnly: true
-      volumes:
-        - name: config
-          configMap:
-            name: {{ include "edge-connector.fullname" . }}
-        - name: tls
-          secret:
-            secretName: {{ required "tls.existingSecret is required" .Values.tls.existingSecret }}
-            defaultMode: 0440
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
-          labelSelector:
-            matchLabels:
-              {{- include "edge-connector.selectorLabels" . | nindent 14 }}
-      {{- with .Values.nodeSelector }}
-      nodeSelector:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.tolerations }}
-      tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.affinity }}
-      affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+    {{- include "edge-connector.podTemplate" . | nindent 4 }}
+{{- end }}

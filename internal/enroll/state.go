@@ -42,6 +42,20 @@ func (s State) Certificate() (*x509.Certificate, error) {
 	return pki.LoadCert(s.identity())
 }
 
+// CheckWritable fails unless the connector can save into the directory, so it
+// does not spend a token on a certificate it would then lose.
+func (s State) CheckWritable() error {
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return fmt.Errorf("state_dir: %w", err)
+	}
+	f, err := os.CreateTemp(s.Dir, ".write-check.*")
+	if err != nil {
+		return fmt.Errorf("state_dir %s is not writable (mount a persistent volume there): %w", s.Dir, err)
+	}
+	f.Close()
+	return os.Remove(f.Name())
+}
+
 // Save stores a certificate and its key, replacing the previous pair in one
 // rename, and, when hubCA is not nil, the hub's CA.
 func (s State) Save(key *ecdsa.PrivateKey, cert *x509.Certificate, hubCA *x509.Certificate) error {

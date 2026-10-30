@@ -3,10 +3,18 @@ hub:
   address: acme.connect.instalily.ai:443
   connections: 2
 
-tls:
-  ca_file: /etc/edge-connector/tls/ca.crt
-  cert_file: /etc/edge-connector/tls/tls.crt
-  key_file: /etc/edge-connector/tls/tls.key
+# Enrollment: the connector generates its key, enrolls with the token once,
+# and keeps its certificate in the "state" volume, renewing it itself.
+state_dir: /var/lib/edge-connector
+enrollment:
+  token_file: /etc/edge-connector/token
+
+# Or, with certificates issued by hand, instead of state_dir and enrollment
+# (and mount them in docker-compose.yml):
+# tls:
+#   ca_file: /etc/edge-connector/tls/ca.crt
+#   cert_file: /etc/edge-connector/tls/tls.crt
+#   key_file: /etc/edge-connector/tls/tls.key
 
 # The only targets Instalily can reach. Only you can change this list.
 allow:

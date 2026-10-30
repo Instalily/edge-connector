@@ -12,7 +12,6 @@ networks:
     internal: true
 
 x-hardened: &hardened
-  user: "${E2E_UID:?}:${E2E_GID:?}"
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
@@ -28,6 +27,8 @@ services:
       interval: 1s
       retries: 30
 
+  # Runs as the image's own non-root user, as customers do, enrolling with the
+  # token into a fresh named volume.
   connector:
     <<: *hardened
     build:
@@ -36,7 +37,8 @@ services:
     command: ["-config", "/etc/edge-connector/config.yaml"]
     volumes:
       - ./connector.yaml:/etc/edge-connector/config.yaml:ro
-      - ${E2E_PKI:?}:/pki:ro
+      - ${E2E_PKI:?}/token:/etc/edge-connector/token:ro
+      - state:/var/lib/edge-connector
     networks: [customer, wan]
     healthcheck:
       test: ["CMD", "/usr/local/bin/edge-connector", "-probe", "http://127.0.0.1:8080/readyz"]
@@ -46,8 +48,10 @@ services:
       postgres:
         condition: service_healthy
 
+  # Runs as the invoking user, to read the keys run.sh generated.
   hub:
     <<: *hardened
+    user: "${E2E_UID:?}:${E2E_GID:?}"
     build:
       context: ../..
       target: hub
@@ -68,3 +72,6 @@ services:
       PGCONNECT_TIMEOUT: "5"
     networks: [instalily]
     profiles: [client]
+
+volumes:
+  state: {}

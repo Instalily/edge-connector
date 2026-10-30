@@ -142,10 +142,20 @@ release's hub digest.
 ## Deploying the connector
 
 - **Kubernetes:** [`deploy/helm/edge-connector`](deploy/helm/edge-connector).
-  The required values are `image`, `hub.address`, `tls.existingSecret`
-  (`ca.crt`, `tls.crt`, `tls.key`) and `allow`. Changing `allow` rolls the
-  pods. An optional NetworkPolicy limits egress to DNS plus the CIDRs you list.
-- **Docker / VM:** [`deploy/compose`](deploy/compose).
+  Required values are `image`, `hub.address`, `allow`, and either
+  `enrollment.tokenSecret` (recommended) or `tls.existingSecret`.
+  - **Enrollment:** a Secret holding the token under the key `token`. The
+    chart runs a StatefulSet, giving each replica its own small
+    PersistentVolumeClaim for its key and certificate. The claims are kept if
+    the chart is uninstalled. After every replica has enrolled, the token
+    Secret can be deleted; replicas added later need a fresh token.
+  - **Certificates issued by hand:** a Secret holding `ca.crt`, `tls.crt` and
+    `tls.key`. The chart runs a Deployment.
+
+  Changing `allow` rolls the pods. An optional NetworkPolicy limits egress to
+  DNS plus the CIDRs you list.
+- **Docker / VM:** [`deploy/compose`](deploy/compose). The token is a file, and
+  the state is a named volume.
 
 ## Certificates and enrollment
 
@@ -296,9 +306,6 @@ can reach. It checks that:
 - **One hub replica per customer.** A connection to an endpoint must land on
   the replica that holds a tunnel. Running several replicas needs either
   connectors that dial every replica, or replicas that route to each other.
-- **Enrollment packaging.** The Helm chart, compose file and gcp-hub module
-  still use certificates issued by hand. Next: a StatefulSet with a state
-  volume, a compose state volume, and enrollment inputs for the hub module.
 - **TCP only.** No UDP.
 - **Logs only.** No Prometheus metrics yet: tunnel count, streams, bytes, and
   refusals by reason.

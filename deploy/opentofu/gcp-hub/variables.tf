@@ -50,7 +50,7 @@ variable "machine_type" {
 }
 
 variable "tls" {
-  description = "Secret Manager secrets, as projects/<project>/secrets/<name>, holding the customer CA certificate (which issued the connectors' certificates), the hub's certificate, and its private key, all PEM. The hub reads their latest versions at boot. The hub certificate must name the address connectors dial: tunnel_ip, or a DNS name that resolves to it."
+  description = "Secret Manager secrets, as projects/<project>/secrets/<name>, holding, all PEM: the connector CA certificate (which issues the connectors' certificates); the hub's certificate followed by the hub CA, so enrolling connectors can pin it; and the hub's private key. The hub reads their latest versions at boot. The hub certificate must name the address connectors dial: tunnel_ip, or a DNS name that resolves to it."
   type = object({
     ca_secret   = string
     cert_secret = string
@@ -62,6 +62,28 @@ variable "tls" {
       for s in values(var.tls) : can(regex("^projects/[^/]+/secrets/[A-Za-z0-9_-]+$", s))
     ])
     error_message = "Each tls secret must be projects/<project>/secrets/<name>."
+  }
+}
+
+variable "enrollment" {
+  description = "Lets connectors enroll with a token and renew their own certificates. connector_ca_key_secret holds the connector CA's private key, which the hub signs with; hub_ca_secret the hub CA certificate (never its key). token_public_keys is the PEM of edgectl's token.pub, one or more keys; it is public. Null: connectors use certificates issued by hand."
+  type = object({
+    connector_ca_key_secret = string
+    hub_ca_secret           = string
+    token_public_keys       = string
+    certificate_lifetime    = optional(string, "168h")
+  })
+  default = null
+
+  validation {
+    condition = var.enrollment == null ? true : (
+      can(regex("^projects/[^/]+/secrets/[A-Za-z0-9_-]+$", var.enrollment.connector_ca_key_secret)) &&
+      can(regex("^projects/[^/]+/secrets/[A-Za-z0-9_-]+$", var.enrollment.hub_ca_secret)) &&
+      strcontains(var.enrollment.token_public_keys, "-----BEGIN PUBLIC KEY-----") &&
+      !strcontains(var.enrollment.token_public_keys, "PRIVATE KEY") &&
+      can(regex("^[0-9]+h$", var.enrollment.certificate_lifetime))
+    )
+    error_message = "enrollment needs two projects/<project>/secrets/<name> secrets, token_public_keys as PEM public keys (never the private token.key), and certificate_lifetime in hours, e.g. \"168h\"."
   }
 }
 

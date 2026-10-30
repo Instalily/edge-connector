@@ -1,0 +1,21 @@
+{{- if include "edge-connector.enrolls" . }}
+The connector enrolls with the token in Secret
+{{ .Values.enrollment.tokenSecret | default (printf "%s-enrollment" (include "edge-connector.fullname" .)) }} (key "token"){{ if not .Values.enrollment.tokenSecret }}, which you
+have not named: set enrollment.tokenSecret before the first install{{ end }}.
+
+Watch it enroll and connect:
+
+  kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} -f
+
+Once every replica logs "enrolled" and "tunnel up", the token Secret can be
+deleted. Each replica keeps its certificate on its PersistentVolumeClaim and
+renews it itself; a replica whose claim is lost, or a replica added later,
+needs a fresh token.
+{{- else }}
+The connector uses the certificate in Secret {{ .Values.tls.existingSecret }}.
+It is not renewed automatically: replace the Secret before it expires.
+{{- end }}
+
+Check the allowlist it enforces:
+
+  kubectl exec -n {{ .Release.Namespace }} {{ if include "edge-connector.enrolls" . }}statefulset{{ else }}deployment{{ end }}/{{ include "edge-connector.fullname" . }} -- /usr/local/bin/edge-connector -config /etc/edge-connector/config.yaml -check

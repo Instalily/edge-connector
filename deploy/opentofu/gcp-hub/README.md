@@ -38,23 +38,49 @@ Compute Engine VM on Container-Optimized OS, in the solution's own VPC.
 - **Egress:** the subnetwork has Cloud NAT, so the VM, which has no external
   IP, can pull the image from ECR Public and reach Secret Manager. Private
   Google Access alone covers Secret Manager, but not the image.
-- **Secrets:** the three exist and hold PEM. Create them outside OpenTofu so
-  their contents stay out of state. The hub certificate must name the address
+- **Secrets:** they exist and hold PEM. Create them outside OpenTofu so their
+  contents stay out of state. The hub certificate must name the address
   connectors dial: `tunnel_ip`, or a DNS name for it. Reserve the address first
   (`-target=module.edge_hub.google_compute_address.tunnel`) if you issue
   against the IP.
 
+With enrollment (recommended), the hub CA's key and the token signing key stay
+in Instalily's secret store. Only the connector CA's key goes to the hub, so
+it can sign connector certificates:
+
 ```bash
-edgectl ca -name acme -out pki/
-edgectl issue -ca pki/ -name hub -ip <tunnel_ip> -server -out pki/
-edgectl issue -ca pki/ -name connector-1 -client -out pki/
-gcloud secrets create edge-hub-ca   --data-file=pki/ca.crt
-gcloud secrets create edge-hub-cert --data-file=pki/hub.crt
-gcloud secrets create edge-hub-key  --data-file=pki/hub.key
+edgectl ca -name acme -prefix hub-ca -out pki/
+edgectl ca -name acme -prefix connector-ca -out pki/
+edgectl issue -ca pki/ -ca-prefix hub-ca -name hub -ip <tunnel_ip> -server -out pki/
+gcloud secrets create edge-hub-connector-ca     --data-file=pki/connector-ca.crt
+gcloud secrets create edge-hub-connector-ca-key --data-file=pki/connector-ca.key
+gcloud secrets create edge-hub-cert             --data-file=pki/hub.crt   # the hub's certificate, then the hub CA
+gcloud secrets create edge-hub-key              --data-file=pki/hub.key
+gcloud secrets create edge-hub-hub-ca           --data-file=pki/hub-ca.crt
 ```
 
-Keep `ca.key` in Instalily's secrets store, never on the hub. The customer
-gets `ca.crt`, `connector-1.crt` and `connector-1.key`.
+```hcl
+  tls = {
+    ca_secret   = "projects/acme-solution/secrets/edge-hub-connector-ca"
+    cert_secret = "projects/acme-solution/secrets/edge-hub-cert"
+    key_secret  = "projects/acme-solution/secrets/edge-hub-key"
+  }
+  enrollment = {
+    connector_ca_key_secret = "projects/acme-solution/secrets/edge-hub-connector-ca-key"
+    hub_ca_secret           = "projects/acme-solution/secrets/edge-hub-hub-ca"
+    token_public_keys       = file("token.pub") # edgectl token-key's public half
+  }
+```
+
+Then give the customer a token:
+
+```bash
+edgectl token -key token.key -hub-ca pki/hub-ca.crt -identity connector-1
+```
+
+Without enrollment, issue the connector's certificate by hand from the
+connector CA (`edgectl issue -ca pki/ -ca-prefix connector-ca -name
+connector-1 -client -out pki/`), and leave `enrollment` unset.
 
 ## Using it
 
@@ -64,9 +90,11 @@ See [`examples/basic`](examples/basic). Pin `source` to a release tag, and
 - The customer sets the connector's `hub.address` to `tunnel_address`.
 - The solution connects to `endpoints["<name>"]`.
 
-To rotate certificates, add new secret versions and reset the VM
-(`gcloud compute instance-groups managed recreate-instances`). The hub reads
-the latest versions at start.
+To rotate the hub's certificate or keys, add new secret versions and reset the
+VM (`gcloud compute instance-groups managed recreate-instances`). The hub
+reads the latest versions at start. Enrolled connectors renew their own
+certificates. To add a token signing key, append it to `token_public_keys`,
+which rolls out a new VM.
 
 ## Limits
 

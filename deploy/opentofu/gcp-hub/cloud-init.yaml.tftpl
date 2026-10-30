@@ -8,6 +8,13 @@ write_files:
     permissions: "0644"
     content: |
       ${indent(6, config)}
+%{ if token_public_keys != "" ~}
+  # Public keys that enrollment tokens may be signed with. Not secret.
+  - path: /var/lib/edge-hub/token.pub
+    permissions: "0644"
+    content: |
+      ${indent(6, token_public_keys)}
+%{ endif ~}
   - path: /var/lib/edge-hub/fetch-tls.sh
     permissions: "0644"
     content: |
@@ -22,12 +29,15 @@ write_files:
           "https://secretmanager.googleapis.com/v1/$1/versions/latest:access" \
           | tr -d ' \n' | sed -E 's/.*"data":"([^"]+)".*/\1/' | base64 -d > "$2"
       }
-      fetch '${ca_secret}' "$dir/tls/ca.crt"
-      fetch '${cert_secret}' "$dir/tls/tls.crt"
-      fetch '${key_secret}' "$dir/tls/tls.key"
+%{ for file, secret in secret_files ~}
+      fetch '${secret}' "$dir/tls/${file}"
+%{ endfor ~}
       cp /var/lib/edge-hub/config.yaml "$dir/config.yaml"
+      if [ -f /var/lib/edge-hub/token.pub ]; then
+        cp /var/lib/edge-hub/token.pub "$dir/token.pub"
+      fi
       chown -R 65532:65532 "$dir"
-      chmod 0400 "$dir/tls/tls.key"
+      chmod 0400 "$dir"/tls/*.key
   - path: /etc/systemd/system/edge-hub.service
     permissions: "0644"
     content: |
