@@ -118,10 +118,12 @@ jobs:
             os=${platform%/*} arch=${platform#*/}
             ext=""
             if [ "$os" = windows ]; then ext=.exe; fi
-            for cmd in connector edgectl; do
+            # Each binary is named as the README and images name it.
+            for binary in edge-connector:connector edgectl:edgectl; do
+              name=${binary%%:*} cmd=${binary#*:}
               CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
                 -ldflags "-s -w -X main.version=$VERSION" \
-                -o "dist/edge-$cmd-$VERSION-$os-$arch$ext" "./cmd/$cmd"
+                -o "dist/$name-$VERSION-$os-$arch$ext" "./cmd/$cmd"
             done
           done
           (cd dist && sha256sum -- * > SHA256SUMS)
