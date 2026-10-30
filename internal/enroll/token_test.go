@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -125,5 +126,22 @@ func TestTokenKeyFiles(t *testing.T) {
 	}
 	if _, err := Verify(tok, pubs, now); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCheckWritable(t *testing.T) {
+	if err := (State{Dir: filepath.Join(t.TempDir(), "state")}).CheckWritable(); err != nil {
+		t.Fatalf("new directory: %v", err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to read-only directories")
+	}
+	ro := t.TempDir()
+	if err := os.Chmod(ro, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ro, 0o700) })
+	if err := (State{Dir: ro}).CheckWritable(); err == nil {
+		t.Fatal("a read-only directory passed the check")
 	}
 }

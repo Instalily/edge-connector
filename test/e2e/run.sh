@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Runs the hub and a connector as containers on separated networks (see
-# docker-compose.yml) and checks that a client can reach Postgres in the
-# customer network only through the hub, and only on an allowlisted port.
+# docker-compose.yml). The connector enrolls with a token. Checks that a
+# client can reach Postgres in the customer network only through the hub, and
+# only on an allowlisted port, and that the connector comes back from its
+# state volume without the token.
 set -euo pipefail
 cd "$(dirname "$0")" || exit
 
@@ -31,11 +33,19 @@ edgectl() {
   compose run --rm --no-deps -T --user "$E2E_UID:$E2E_GID" -v "$E2E_PKI:/out" \
     --entrypoint /usr/local/bin/edgectl hub "$@" >/dev/null
 }
-edgectl ca -name e2e -out /out
-edgectl issue -ca /out -name hub -dns hub.test -server -out /out
-edgectl issue -ca /out -name connector-1 -client -out /out
+edgectl ca -name e2e -prefix hub-ca -out /out
+edgectl ca -name e2e -prefix connector-ca -out /out
+edgectl issue -ca /out -ca-prefix hub-ca -name hub -dns hub.test -server -out /out
+edgectl token-key -out /out
+# The token is the one file the connector reads from here, as UID 65532.
+compose run --rm --no-deps -T -v "$E2E_PKI:/out" --entrypoint /usr/local/bin/edgectl hub \
+  token -key /out/token.key -hub-ca /out/hub-ca.crt -identity connector-1 -expires 1h \
+  2>/dev/null > "$E2E_PKI/token"
+chmod 0644 "$E2E_PKI/token"
 
 compose up --detach --wait postgres hub connector
+compose logs connector | grep -q '"msg":"enrolled"' || fail "connector did not enroll"
+pass "connector enrolls with the token, as its own non-root user"
 
 out=$(client psql -h hub -tAc "select 'through the tunnel'")
 [ "$out" = "through the tunnel" ] || fail "query through the hub returned: $out"
@@ -55,3 +65,12 @@ if client pg_isready -h postgres -t 3 >/dev/null 2>&1; then
   fail "client reached Postgres directly"
 fi
 pass "client cannot reach the customer network directly"
+
+# A new container, the same state volume, and no token.
+: > "$E2E_PKI/token"
+compose up --detach --wait --force-recreate --no-deps connector
+compose logs connector | grep -q '"msg":"using enrolled certificate"' || fail "recreated connector did not reuse its state"
+out=$(client psql -h hub -tAc "select 'after restart'")
+[ "$out" = "after restart" ] || fail "query after restart returned: $out"
+pass "recreated connector reconnects from its state volume without the token"
+

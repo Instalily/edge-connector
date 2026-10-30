@@ -1,9 +1,8 @@
 hub:
   address: hub.test:8443
-tls:
-  ca_file: /pki/ca.crt
-  cert_file: /pki/connector-1.crt
-  key_file: /pki/connector-1.key
+state_dir: /var/lib/edge-connector
+enrollment:
+  token_file: /etc/edge-connector/token
 allow:
   - host: postgres
     ports: [5432]

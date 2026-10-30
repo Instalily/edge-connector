@@ -169,3 +169,72 @@ run "rejects_endpoints_open_to_the_internet" {
   }
   expect_failures = [var.endpoint_source_ranges]
 }
+
+run "without_enrollment_the_hub_has_no_enrollment_config" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yamldecode(local.hub_config)), "enrollment") && !strcontains(local.user_data, "token.pub\n    permissions")
+    error_message = "A hub without enrollment must not configure it."
+  }
+}
+
+run "enrollment_adds_its_config_secrets_and_public_keys" {
+  command = plan
+  variables {
+    enrollment = {
+      connector_ca_key_secret = "projects/acme-solution/secrets/edge-hub-connector-ca-key"
+      hub_ca_secret           = "projects/acme-solution/secrets/edge-hub-hub-ca"
+      token_public_keys       = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAexample\n-----END PUBLIC KEY-----\n"
+    }
+  }
+
+  assert {
+    condition = yamldecode(local.hub_config).enrollment == {
+      ca_key_file          = "/etc/edge-hub/tls/connector-ca.key"
+      hub_ca_file          = "/etc/edge-hub/tls/hub-ca.crt"
+      token_keys_file      = "/etc/edge-hub/token.pub"
+      certificate_lifetime = "168h"
+    }
+    error_message = "The hub's enrollment config must point at the fetched key, hub CA and token keys, with 7-day certificates by default."
+  }
+
+  assert {
+    condition = toset([for m in google_secret_manager_secret_iam_member.hub : m.secret_id]) == toset([
+      "projects/acme-solution/secrets/edge-hub-ca",
+      "projects/acme-solution/secrets/edge-hub-cert",
+      "projects/acme-solution/secrets/edge-hub-key",
+      "projects/acme-solution/secrets/edge-hub-connector-ca-key",
+      "projects/acme-solution/secrets/edge-hub-hub-ca",
+    ])
+    error_message = "With enrollment, the hub reads exactly its five secrets."
+  }
+
+  assert {
+    condition = alltrue([
+      for line in [
+        "fetch 'projects/acme-solution/secrets/edge-hub-connector-ca-key' \"$dir/tls/connector-ca.key\"",
+        "fetch 'projects/acme-solution/secrets/edge-hub-hub-ca' \"$dir/tls/hub-ca.crt\"",
+        "chmod 0400 \"$dir\"/tls/*.key",
+      ] : strcontains(one([for f in yamldecode(local.user_data).write_files : f.content if f.path == "/var/lib/edge-hub/fetch-tls.sh"]), line)
+    ])
+    error_message = "The boot script must fetch the connector CA key and hub CA, and make every key owner-read-only."
+  }
+
+  assert {
+    condition     = one([for f in yamldecode(local.user_data).write_files : f.content if f.path == "/var/lib/edge-hub/token.pub"]) == "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAexample\n-----END PUBLIC KEY-----\n"
+    error_message = "cloud-init must write the token public keys as given."
+  }
+}
+
+run "rejects_a_private_key_as_token_public_keys" {
+  command = plan
+  variables {
+    enrollment = {
+      connector_ca_key_secret = "projects/acme-solution/secrets/k"
+      hub_ca_secret           = "projects/acme-solution/secrets/c"
+      token_public_keys       = "-----BEGIN PUBLIC KEY-----\nx\n-----END PUBLIC KEY-----\n-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"
+    }
+  }
+  expect_failures = [var.enrollment]
+}

@@ -1,10 +1,14 @@
 tunnel:
   listen: ":8443"
   tls:
-    ca_file: /pki/ca.crt
+    ca_file: /pki/connector-ca.crt
     cert_file: /pki/hub.crt
     key_file: /pki/hub.key
   allowed_identities: [connector-1]
+enrollment:
+  ca_key_file: /pki/connector-ca.key
+  hub_ca_file: /pki/hub-ca.crt
+  token_keys_file: /pki/token.pub
 endpoints:
   - name: postgres
     listen: ":5432"

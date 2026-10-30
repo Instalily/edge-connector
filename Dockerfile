@@ -17,7 +17,8 @@ COPY . .
 ARG VERSION=dev
 ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/...
+    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/... \
+ && mkdir /out/state
 
 FROM gcr.io/distroless/static-debian12:nonroot AS hub
 COPY --from=build /out/hub /usr/local/bin/edge-hub
@@ -26,4 +27,7 @@ ENTRYPOINT ["/usr/local/bin/edge-hub"]
 
 FROM gcr.io/distroless/static-debian12:nonroot AS connector
 COPY --from=build /out/connector /usr/local/bin/edge-connector
+# An enrolled connector's state_dir. A new volume mounted here starts out
+# owned by the non-root user, as Docker copies the directory's ownership.
+COPY --from=build --chown=65532:65532 /out/state /var/lib/edge-connector
 ENTRYPOINT ["/usr/local/bin/edge-connector"]

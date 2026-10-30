@@ -55,8 +55,12 @@ jobs:
       - name: Lint and render
         run: |
           helm() { docker run --rm -v "$PWD/deploy/helm:/charts:ro" alpine/helm:3.16.4 "$@"; }
-          helm lint --strict /charts/edge-connector -f /charts/edge-connector/ci/test-values.yaml
-          helm template ci /charts/edge-connector -f /charts/edge-connector/ci/test-values.yaml >/dev/null
+          # Enrollment (StatefulSet) and certificates issued by hand (Deployment).
+          for values in deploy/helm/edge-connector/ci/*-values.yaml; do
+            values=/charts/edge-connector/ci/$(basename "$values")
+            helm lint --strict /charts/edge-connector -f "$values"
+            helm template ci /charts/edge-connector -f "$values" >/dev/null
+          done
           if helm template ci /charts/edge-connector >/dev/null 2>&1; then
             echo "::error::The chart rendered without its required values"
             exit 1

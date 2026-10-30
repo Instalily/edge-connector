@@ -16,7 +16,22 @@ locals {
     for i, e in var.endpoints : e.name => 20000 + i
   }
 
-  hub_config = yamlencode({
+  # Secret Manager secrets the VM reads at boot, by the file name they get in
+  # /etc/edge-hub/tls. With enrollment, the hub also holds the connector CA's
+  # key, to sign with, and the hub CA's certificate, which tokens must name.
+  secret_files = merge(
+    {
+      "ca.crt"  = var.tls.ca_secret
+      "tls.crt" = var.tls.cert_secret
+      "tls.key" = var.tls.key_secret
+    },
+    var.enrollment == null ? {} : {
+      "connector-ca.key" = var.enrollment.connector_ca_key_secret
+      "hub-ca.crt"       = var.enrollment.hub_ca_secret
+    },
+  )
+
+  hub_config = yamlencode(merge({
     tunnel = {
       listen = ":${local.tunnel_container_port}"
       tls = {
@@ -26,6 +41,14 @@ locals {
       }
       allowed_identities = var.allowed_identities
     }
+    }, var.enrollment == null ? {} : {
+    enrollment = {
+      ca_key_file          = "/etc/edge-hub/tls/connector-ca.key"
+      hub_ca_file          = "/etc/edge-hub/tls/hub-ca.crt"
+      token_keys_file      = "/etc/edge-hub/token.pub"
+      certificate_lifetime = var.enrollment.certificate_lifetime
+    }
+    }, {
     endpoints = [
       for e in var.endpoints : {
         name   = e.name
@@ -35,7 +58,7 @@ locals {
     ]
     open_timeout  = "15s"
     health_listen = ":${local.health_port}"
-  })
+  }))
 
   published_ports = concat(
     ["443:${local.tunnel_container_port}", "${local.health_port}:${local.health_port}"],
@@ -44,13 +67,12 @@ locals {
   host_ports = concat([443, local.health_port], [for e in var.endpoints : e.port])
 
   user_data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
-    config      = local.hub_config
-    image       = var.image
-    port_flags  = join(" ", [for p in local.published_ports : "-p ${p}"])
-    host_ports  = local.host_ports
-    ca_secret   = var.tls.ca_secret
-    cert_secret = var.tls.cert_secret
-    key_secret  = var.tls.key_secret
+    config            = local.hub_config
+    image             = var.image
+    port_flags        = join(" ", [for p in local.published_ports : "-p ${p}"])
+    host_ports        = local.host_ports
+    secret_files      = local.secret_files
+    token_public_keys = var.enrollment == null ? "" : trimspace(var.enrollment.token_public_keys)
   })
 
   # Google's health checkers: both passthrough load balancers and autohealing.
@@ -75,7 +97,7 @@ resource "google_project_iam_member" "hub" {
 }
 
 resource "google_secret_manager_secret_iam_member" "hub" {
-  for_each = var.tls
+  for_each = local.secret_files
 
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"

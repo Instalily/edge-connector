@@ -23,9 +23,25 @@ hub:
   # Tunnels per replica.
   connections: 2
 
+# How the connector gets its certificate.
+#
+# Enrollment (the default): create a Secret holding the token Instalily sends
+# you, under the key "token", and name it here. Each replica generates its own
+# key, enrolls once, keeps its certificate on its own small volume, and renews
+# it automatically. The token is only needed until every replica has
+# enrolled, and expires within a week. Adding replicas later needs a fresh
+# token.
+enrollment:
+  tokenSecret: ""
+  storage:
+    size: 64Mi
+    # Empty uses the cluster's default StorageClass.
+    storageClassName: ""
+
+# Certificates issued by hand, instead of enrollment: a Secret holding ca.crt
+# (the hub CA) and tls.crt/tls.key (this connector's certificate). Setting it
+# deploys a Deployment instead of a StatefulSet.
 tls:
-  # Required. A Secret holding ca.crt (the CA that issued the hub's
-  # certificate) and tls.crt/tls.key (this connector's certificate).
   existingSecret: ""
 
 # An http:// or https:// proxy for reaching the hub, e.g.

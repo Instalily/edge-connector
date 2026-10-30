@@ -1,0 +1,40 @@
+{{- if include "edge-connector.enrolls" . }}
+# Enrollment: each replica keeps its own key and certificate on its own
+# volume, so it survives restarts and renews without the token.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "edge-connector.fullname" . }}
+  labels:
+    {{- include "edge-connector.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Required by the API. No Service exists: nothing connects to the connector.
+  serviceName: {{ include "edge-connector.fullname" . }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "edge-connector.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: RollingUpdate
+  # Keep enrolled identities when the chart is uninstalled or scaled down;
+  # delete the claims to start over with a new token.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    {{- include "edge-connector.podTemplate" . | nindent 4 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+        labels:
+          {{- include "edge-connector.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.enrollment.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.enrollment.storage.size }}
+{{- end }}

@@ -56,6 +56,9 @@ func (c *Connector) ensureCertificate(ctx context.Context) error {
 	case !errors.Is(err, os.ErrNotExist):
 		return err
 	}
+	if err := st.CheckWritable(); err != nil {
+		return err
+	}
 	if c.cfg.Enrollment.TokenFile == "" {
 		return errors.New("no valid certificate in state_dir and no enrollment.token_file: get a new token from Instalily")
 	}

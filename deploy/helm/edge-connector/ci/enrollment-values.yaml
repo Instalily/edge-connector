@@ -1,0 +1,22 @@
+# Enrollment, with every optional feature on.
+image:
+  repository: example.com/edge-connector
+  tag: sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+hub:
+  address: acme.connect.instalily.ai:443
+enrollment:
+  tokenSecret: edge-connector-token
+  storage:
+    size: 64Mi
+    storageClassName: standard
+proxy: http://proxy.corp.local:3128
+allow:
+  - host: sap-prd.corp.local
+    ports: [3300]
+  - cidr: 10.20.0.0/16
+    ports: [5432]
+networkPolicy:
+  enabled: true
+  egress:
+    - cidr: 203.0.113.10/32
+      ports: [443]
