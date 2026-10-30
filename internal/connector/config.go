@@ -22,7 +22,17 @@ type Config struct {
 		// Connections is how many tunnels to keep open, for redundancy.
 		Connections int `yaml:"connections"`
 	} `yaml:"hub"`
+	// TLS holds certificate files issued by hand. Leave it empty to enroll
+	// instead.
 	TLS tlsconfig.Files `yaml:"tls"`
+	// StateDir is where an enrolled connector keeps its key, certificate and
+	// the hub's CA. It must persist across restarts.
+	StateDir   string `yaml:"state_dir"`
+	Enrollment struct {
+		// TokenFile holds the enrollment token. It is read only while the
+		// connector has no valid certificate, and may be removed after.
+		TokenFile string `yaml:"token_file"`
+	} `yaml:"enrollment"`
 	// Proxy is an http:// or https:// proxy URL. Empty means HTTPS_PROXY and
 	// NO_PROXY decide.
 	Proxy  string            `yaml:"proxy"`
@@ -35,6 +45,9 @@ type Config struct {
 	// them.
 	HealthListen string `yaml:"health_listen"`
 }
+
+// Enrolls reports whether the connector gets its certificate by enrollment.
+func (c *Config) Enrolls() bool { return c.StateDir != "" }
 
 // Load reads and checks the configuration file at path.
 func Load(path string) (*Config, error) {
@@ -52,6 +65,13 @@ func (c *Config) normalize() error {
 	}
 	if c.Hub.ServerName == "" {
 		c.Hub.ServerName = host
+	}
+	static := c.TLS != (tlsconfig.Files{})
+	switch {
+	case static && (c.StateDir != "" || c.Enrollment.TokenFile != ""):
+		return errors.New("set tls for certificates issued by hand, or state_dir and enrollment to enroll, not both")
+	case !static && c.StateDir == "":
+		return errors.New("set tls, or state_dir (with enrollment.token_file for the first start) to enroll")
 	}
 	if c.Hub.Connections == 0 {
 		c.Hub.Connections = 2
