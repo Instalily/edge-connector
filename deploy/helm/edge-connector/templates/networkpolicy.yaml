@@ -14,11 +14,10 @@ spec:
   # come from the node, which most network plugins always allow.
   ingress: []
   egress:
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-      ports:
+    # DNS to any address. Cluster DNS isn't always a pod in kube-system: EKS
+    # Auto Mode answers on the node, and NodeLocal DNSCache on a link-local
+    # address, which a namespaceSelector would block.
+    - ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
     {{- range .Values.networkPolicy.egress }}

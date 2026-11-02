@@ -11,6 +11,19 @@ Once every replica logs "enrolled" and "tunnel up", the token Secret can be
 deleted. Each replica keeps its certificate on its PersistentVolumeClaim and
 renews it itself; a replica whose claim is lost, or a replica added later,
 needs a fresh token.
+{{- if not .Values.enrollment.storage.storageClassName }}
+
+The claims use the cluster's default StorageClass. If the pods stay Pending
+and `kubectl describe pvc -n {{ .Release.Namespace }}` reports
+"no storage class is set", the cluster has no default. An upgrade can't fix
+that; instead:
+
+  helm uninstall -n {{ .Release.Namespace }} {{ .Release.Name }}
+  kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+then install again with enrollment.storage.storageClassName set to one that
+`kubectl get storageclass` lists.
+{{- end }}
 {{- else }}
 The connector uses the certificate in Secret {{ .Values.tls.existingSecret }}.
 It is not renewed automatically: replace the Secret before it expires.
