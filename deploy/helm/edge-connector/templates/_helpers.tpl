@@ -33,6 +33,9 @@ hub:
   server_name: {{ . | quote }}
   {{- end }}
   connections: {{ .Values.hub.connections }}
+  {{- with .Values.hub.rotateAfter }}
+  rotate_after: {{ . }}
+  {{- end }}
 {{- if include "edge-connector.enrolls" . }}
 state_dir: /var/lib/edge-connector
 enrollment:

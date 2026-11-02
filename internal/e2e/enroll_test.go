@@ -152,11 +152,16 @@ func TestEnrollRenewAndRestart(t *testing.T) {
 		if renewed.PublicKey.(*ecdsa.PublicKey).Equal(first.PublicKey) {
 			t.Error("renewal kept the old key; it must rotate it")
 		}
-		time.Sleep(time.Until(first.NotAfter) + time.Second)
-		waitFor(t, func() bool { return h.Tunnels() == 2 })
-		if got := roundTrip(t, h.EndpointAddr("echo"), []byte("renewed")); string(got) != "renewed" {
-			t.Fatalf("got %q", got)
+		// The connector moves its tunnels onto the renewed certificate before
+		// the hub would close them at the first one's expiry, so endpoint
+		// connections keep working straight through it.
+		for end := first.NotAfter.Add(time.Second); time.Now().Before(end); {
+			if got := roundTrip(t, h.EndpointAddr("echo"), []byte("renewed")); string(got) != "renewed" {
+				t.Fatalf("round trip near the first certificate's expiry: got %q", got)
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
+		waitFor(t, func() bool { return h.Tunnels() == 2 })
 	})
 
 	t.Run("restarts from its state without the token", func(t *testing.T) {

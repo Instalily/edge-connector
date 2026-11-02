@@ -22,6 +22,11 @@ hub:
   serverName: ""
   # Tunnels per replica.
   connections: 2
+  # Roughly how long a tunnel lasts before the connector replaces it, opening
+  # the new one first. Empty uses the connector's default, 5m. Rotation
+  # moves tunnels onto renewed certificates, and onto new hub instances
+  # while Instalily updates the hub, without a gap in access.
+  rotateAfter: ""
 
 # How the connector gets its certificate.
 #

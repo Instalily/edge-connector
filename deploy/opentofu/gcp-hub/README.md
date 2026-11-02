@@ -14,7 +14,10 @@ Compute Engine VM on Container-Optimized OS, in the solution's own VPC.
 - **Instance group:** a managed instance group of one VM, on `cos-stable`, with
   Shielded VM and OS Login.
   - A failing `/healthz` replaces the VM.
-  - A changed `image` rolls out a new VM before the old one stops.
+  - A changed `image` rolls out a new VM before the old one stops. The old
+    one stays for `rollout_wait_sec` (15 minutes by default) while
+    connectors rotate their tunnels, so some reach the new VM before the old
+    one goes.
 - **Container:** cloud-init installs a systemd unit that, on every start:
   1. reads the three TLS secrets from Secret Manager into tmpfs;
   2. runs the digest-pinned hub image read-only, as UID 65532, with no
@@ -102,9 +105,16 @@ which rolls out a new VM.
 
 ## Limits
 
-- One VM, so a zone outage interrupts tunnels until the VM is back. A
-  rollout or a replacement interrupts them only until connectors reconnect to
-  the new VM, about a second after the old one stops. Endpoint connections
-  fail for a few seconds more, until the load balancer sees the new VM's
-  tunnels: about 6 seconds in testing.
+- One VM, so a zone outage interrupts tunnels until the VM is back.
+- A rollout cuts only the connections open through the old VM when it
+  stops. New endpoint connections go to whichever VM holds a tunnel, and
+  connectors (v0.3.0 and later) rotate theirs onto the new VM during
+  `rollout_wait_sec`. Older connectors don't rotate: endpoints fail for
+  about 6 seconds after the old VM stops, until they reconnect.
+- Autohealing and `recreate-instances` replace the VM in place, without a
+  second one, so endpoints fail until the new VM is up and connectors have
+  reconnected: a minute or two.
+- The instance group manager uses the `google-beta` provider, for
+  `min_ready_sec`. Without a `google-beta` provider block it uses the same
+  credentials as `google`.
 - Endpoint ports 22, 443 and 8080 are reserved by the VM.
