@@ -85,6 +85,7 @@ hub:
   address: acme.connect.instalily.ai:443
   server_name: ""        # name to verify on the hub's certificate; defaults to address's host
   connections: 2         # tunnels to keep open
+  rotate_after: 5m       # replace each tunnel about this often, opening the new one first
 state_dir: /var/lib/edge-connector         # enrolled key, certificate and hub CA; must persist
 enrollment:
   token_file: /etc/edge-connector/token    # needed only until the first enrollment
@@ -203,8 +204,10 @@ Connectors get their own certificates:
    token.
 5. At two thirds of the certificate's lifetime, the connector renews it with
    a new key, authenticating with the current certificate (ALPN
-   `edge-renew/1`). The hub closes any tunnel whose certificate has expired,
-   and the connector reconnects with the new one.
+   `edge-renew/1`). Shortly before the old certificate expires, the connector
+   rotates any tunnel still using it: it opens a new tunnel with the renewed
+   certificate, then lets the old one drain. The hub closes any tunnel whose
+   certificate has expired regardless.
 
 A connector offline for longer than its certificate lasts needs a new token.
 To revoke a connector, remove its identity from `allowed_identities`: the hub

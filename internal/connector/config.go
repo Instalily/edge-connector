@@ -21,6 +21,11 @@ type Config struct {
 		ServerName string `yaml:"server_name"`
 		// Connections is how many tunnels to keep open, for redundancy.
 		Connections int `yaml:"connections"`
+		// RotateAfter is roughly how long a tunnel lasts before the connector
+		// replaces it, opening the new one before letting the old one drain.
+		// Rotation spreads tunnels across a hub's instances, so a new
+		// instance gets tunnels before an old one stops.
+		RotateAfter time.Duration `yaml:"rotate_after"`
 	} `yaml:"hub"`
 	// TLS holds certificate files issued by hand. Leave it empty to enroll
 	// instead.
@@ -78,6 +83,12 @@ func (c *Config) normalize() error {
 	}
 	if c.Hub.Connections < 1 || c.Hub.Connections > 8 {
 		return errors.New("hub.connections must be between 1 and 8")
+	}
+	if c.Hub.RotateAfter == 0 {
+		c.Hub.RotateAfter = 5 * time.Minute
+	}
+	if c.Hub.RotateAfter < time.Second || c.Hub.RotateAfter > 24*time.Hour {
+		return errors.New("hub.rotate_after must be between 1s and 24h")
 	}
 	if c.Limits.MaxStreams == 0 {
 		c.Limits.MaxStreams = 256

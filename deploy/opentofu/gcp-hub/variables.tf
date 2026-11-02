@@ -65,6 +65,17 @@ variable "tls" {
   }
 }
 
+variable "rollout_wait_sec" {
+  description = "Seconds a rollout keeps the old VM after the new one is healthy. Connectors (v0.3.0 and later) rotate each tunnel about every five minutes, so within this time their tunnels spread over both VMs and endpoints stay up when the old one stops. 900 gives each tunnel about three chances to land on the new VM. 0 replaces the VM as soon as the new one is healthy, which interrupts endpoints for a few seconds."
+  type        = number
+  default     = 900
+
+  validation {
+    condition     = var.rollout_wait_sec >= 0 && var.rollout_wait_sec <= 3600 && floor(var.rollout_wait_sec) == var.rollout_wait_sec
+    error_message = "rollout_wait_sec must be a whole number of seconds from 0 to 3600."
+  }
+}
+
 variable "enrollment" {
   description = "Lets connectors enroll with a token and renew their own certificates. connector_ca_key_secret holds the connector CA's private key, which the hub signs with; hub_ca_secret the hub CA certificate (never its key). token_public_keys is the PEM of edgectl's token.pub, one or more keys; it is public. Null: connectors use certificates issued by hand."
   type = object({

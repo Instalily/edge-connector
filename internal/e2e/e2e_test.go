@@ -60,13 +60,20 @@ endpoints:
 	return h
 }
 
-func startConnector(t *testing.T, ctx context.Context, dir, certDir string, hubAddr net.Addr, allow string) {
+// startConnector runs a connector with a certificate issued by hand.
+// rotateAfter 0 keeps the default.
+func startConnector(t *testing.T, ctx context.Context, dir, certDir string, hubAddr net.Addr, allow string, rotateAfter time.Duration) {
 	t.Helper()
+	rotate := ""
+	if rotateAfter > 0 {
+		rotate = "rotate_after: " + rotateAfter.String()
+	}
 	path := filepath.Join(dir, "connector.yaml")
 	must(t, os.WriteFile(path, fmt.Appendf(nil, `
 hub:
   address: %[1]s
   connections: 2
+  %[5]s
 tls:
   ca_file: %[2]s/ca.crt
   cert_file: %[3]s/connector.crt
@@ -74,7 +81,7 @@ tls:
 limits:
   dial_timeout: 2s
 allow:
-%[4]s`, hubAddr, dir, certDir, allow), 0o600))
+%[4]s`, hubAddr, dir, certDir, allow, rotate), 0o600))
 	cfg, err := connector.Load(path)
 	must(t, err)
 	c, err := connector.New(cfg, logger(t, "connector"))
@@ -101,7 +108,7 @@ func TestTunnel(t *testing.T) {
 `, echo, echoPort, mustPort(t, echoPort)+1, closed))
 	startConnector(t, ctx, dir, dir, h.TunnelAddr(), fmt.Sprintf(`
   - {cidr: 127.0.0.1/32, ports: [%s, %d]}
-`, echoPort, closed))
+`, echoPort, closed), 0)
 	waitFor(t, func() bool { return h.Tunnels() == 2 })
 
 	t.Run("round trip with half-close", func(t *testing.T) {
@@ -156,7 +163,7 @@ func TestHubRejectsConnectorFromAnotherCA(t *testing.T) {
 	// from another CA.
 	startConnector(t, ctx, dir, rogue, h.TunnelAddr(), fmt.Sprintf(`
   - {cidr: 127.0.0.1/32, ports: [%s]}
-`, echoPort))
+`, echoPort), 0)
 
 	time.Sleep(500 * time.Millisecond)
 	if n := h.Tunnels(); n != 0 {

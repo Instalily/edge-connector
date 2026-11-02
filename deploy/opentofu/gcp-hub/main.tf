@@ -170,6 +170,9 @@ resource "google_compute_health_check" "autohealing" {
 }
 
 resource "google_compute_instance_group_manager" "hub" {
+  # For update_policy.min_ready_sec.
+  provider = google-beta
+
   project            = var.project_id
   zone               = var.zone
   name               = local.name
@@ -185,14 +188,17 @@ resource "google_compute_instance_group_manager" "hub" {
     initial_delay_sec = 180
   }
 
-  # A new template starts its VM before the old one stops, so a release
-  # interrupts tunnels only for as long as connectors take to reconnect.
+  # A new template starts its VM before the old one stops. The old one then
+  # stays for rollout_wait_sec, while connectors rotate their tunnels and
+  # some land on the new VM, so endpoints keep working when the old one
+  # stops.
   update_policy {
     type                  = "PROACTIVE"
     minimal_action        = "REPLACE"
     replacement_method    = "SUBSTITUTE"
     max_surge_fixed       = 1
     max_unavailable_fixed = 0
+    min_ready_sec         = var.rollout_wait_sec
   }
 }
 

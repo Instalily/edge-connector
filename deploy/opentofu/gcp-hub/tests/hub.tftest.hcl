@@ -7,6 +7,8 @@ mock_provider "google" {
   }
 }
 
+mock_provider "google-beta" {}
+
 variables {
   name       = "acme"
   project_id = "acme-solution"
@@ -167,6 +169,27 @@ run "endpoints_wait_for_a_tunnel_and_rollouts_do_not_drain" {
     )
     error_message = "Neither backend may drain, or a rollout keeps connectors on the old VM while endpoints go to the new one."
   }
+}
+
+run "rollouts_wait_for_tunnels_to_reach_the_new_vm" {
+  command = plan
+
+  assert {
+    condition = (
+      google_compute_instance_group_manager.hub.update_policy[0].min_ready_sec == 900 &&
+      google_compute_instance_group_manager.hub.update_policy[0].max_surge_fixed == 1 &&
+      google_compute_instance_group_manager.hub.update_policy[0].max_unavailable_fixed == 0
+    )
+    error_message = "A rollout must start the new VM first and keep the old one for rollout_wait_sec (default 900), while connectors rotate tunnels onto the new one."
+  }
+}
+
+run "rejects_a_rollout_wait_beyond_an_hour" {
+  command = plan
+  variables {
+    rollout_wait_sec = 3601
+  }
+  expect_failures = [var.rollout_wait_sec]
 }
 
 run "rejects_a_tag_instead_of_a_digest" {
