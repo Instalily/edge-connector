@@ -4,7 +4,7 @@
 # steps. Keep pki/hub-ca.key and token.key in Instalily's secrets store.
 
 module "edge_hub" {
-  source = "git::https://github.com/Instalily/edge-connector.git//deploy/opentofu/gcp-hub?ref=v0.2.1"
+  source = "git::https://github.com/Instalily/edge-connector.git//deploy/opentofu/gcp-hub?ref=v0.3.0"
 
   name       = "acme"
   project_id = "acme-solution"
@@ -13,8 +13,8 @@ module "edge_hub" {
   network    = "projects/acme-solution/global/networks/main"
   subnetwork = "projects/acme-solution/regions/us-central1/subnetworks/main"
 
-  # From the v0.2.1 release notes.
-  image = "public.ecr.aws/s9u8g9q7/edge-hub@sha256:559caeea4657502c43d1ddd3d8b2f9f2ab2d59d9fb7dfc13f4241d17178bcbbf"
+  # From the v0.3.0 release notes.
+  image = "public.ecr.aws/s9u8g9q7/edge-hub@sha256:a6be365833a30bb12ffb8efcb5b6071bd824b1bfa5d5f483041ac00dce4969d0"
 
   tls = {
     ca_secret   = "projects/acme-solution/secrets/edge-hub-connector-ca"

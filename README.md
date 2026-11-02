@@ -125,6 +125,7 @@ endpoints:
     target: sap-prd.corp.local:3300       # resolved and dialed by the connector
 open_timeout: 15s
 health_listen: ":8080"
+shutdown_grace: 15s   # on SIGTERM, fail both health checks but keep serving this long
 ```
 
 Both files are read strictly: a misspelled key is an error, not an ignored

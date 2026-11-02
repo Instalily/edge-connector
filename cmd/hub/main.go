@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/Instalily/edge-connector/internal/health"
 	"github.com/Instalily/edge-connector/internal/hub"
@@ -31,11 +32,24 @@ func main() {
 		fail(log, err)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	// On SIGTERM the hub first drains: its health checks fail, so load
+	// balancers stop sending it connectors and clients, while it keeps
+	// serving whatever still arrives. After shutdown_grace it stops. A
+	// second signal stops it at once.
+	signals, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		<-signals.Done()
+		stop()
+		log.Info("draining", "grace", cfg.ShutdownGrace.String())
+		h.Drain()
+		time.Sleep(cfg.ShutdownGrace)
+		cancel()
+	}()
 	log.Info("starting", "version", version, "tunnel", h.TunnelAddr().String(), "endpoints", len(cfg.Endpoints))
 	if cfg.HealthListen != "" {
-		go health.Serve(ctx, cfg.HealthListen, h.Ready, log)
+		go health.Serve(ctx, cfg.HealthListen, h.Live, h.Ready, log)
 	}
 	h.Serve(ctx)
 	log.Info("stopped")

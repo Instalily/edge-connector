@@ -63,9 +63,17 @@ run "cloud_init_runs_the_pinned_image_hardened_and_publishes_only_the_hub_ports"
   assert {
     condition = strcontains(
       one([for f in yamldecode(local.user_data).write_files : f.content if f.path == "/etc/systemd/system/edge-hub.service"]),
-      "docker run --rm --name edge-hub --read-only --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --log-driver journald -v /run/edge-hub:/etc/edge-hub:ro -p 443:8443 -p 8080:8080 -p 3300:20000 -p 5432:20001 ${var.image} -config /etc/edge-hub/config.yaml"
+      "docker run --rm --name edge-hub --read-only --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --stop-timeout 30 --log-driver journald -v /run/edge-hub:/etc/edge-hub:ro -p 443:8443 -p 8080:8080 -p 3300:20000 -p 5432:20001 ${var.image} -config /etc/edge-hub/config.yaml"
     )
     error_message = "The unit must run the digest-pinned image read-only, unprivileged, with exactly the tunnel, health and endpoint ports published."
+  }
+
+  assert {
+    condition = strcontains(
+      one([for f in yamldecode(local.user_data).write_files : f.content if f.path == "/etc/systemd/system/edge-hub.service"]),
+      "TimeoutStopSec=45"
+    )
+    error_message = "Stopping the unit must allow longer than the hub's 15s shutdown grace, or it is killed before the load balancers stop sending it traffic."
   }
 
   assert {
