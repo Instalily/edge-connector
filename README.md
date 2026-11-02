@@ -149,11 +149,23 @@ release's hub digest.
     PersistentVolumeClaim for its key and certificate. The claims are kept if
     the chart is uninstalled. After every replica has enrolled, the token
     Secret can be deleted; replicas added later need a fresh token.
+  - **StorageClass:** the claims use the cluster's default StorageClass unless
+    `enrollment.storage.storageClassName` names one. Some clusters have no
+    default (EKS Auto Mode clusters often don't), so check `kubectl get
+    storageclass` first. Without a usable class the pods stay `Pending`, and
+    the setting can't be fixed by an upgrade, because a StatefulSet's claim
+    template can't change. Uninstall, delete the claims (`kubectl delete pvc
+    -l app.kubernetes.io/instance=<release>`), and install again.
   - **Certificates issued by hand:** a Secret holding `ca.crt`, `tls.crt` and
     `tls.key`. The chart runs a Deployment.
 
   Changing `allow` rolls the pods. An optional NetworkPolicy limits egress to
-  DNS plus the CIDRs you list.
+  DNS, to any address, plus the CIDRs you list:
+  - For a target behind a Kubernetes Service, list its ClusterIP as well as
+    its pods. Some network plugins, the AWS VPC CNI among them, match the
+    address before the Service translates it.
+  - Turning the policy on can drop open tunnels once; connectors reconnect
+    by themselves.
 - **Docker / VM:** [`deploy/compose`](deploy/compose). The token is a file, and
   the state is a named volume.
 

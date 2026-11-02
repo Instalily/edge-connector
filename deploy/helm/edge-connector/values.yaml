@@ -35,7 +35,10 @@ enrollment:
   tokenSecret: ""
   storage:
     size: 64Mi
-    # Empty uses the cluster's default StorageClass.
+    # Empty uses the cluster's default StorageClass, the one `kubectl get
+    # storageclass` marks "(default)". If none is marked, name one here before
+    # the first install: without it the claims and pods stay Pending, and a
+    # StatefulSet's claims can't be changed by an upgrade (see the README).
     storageClassName: ""
 
 # Certificates issued by hand, instead of enrollment: a Secret holding ca.crt
@@ -77,8 +80,11 @@ podAnnotations: {}
 podLabels: {}
 
 # Restrict the connector's egress with a NetworkPolicy. NetworkPolicies
-# match addresses, not names, so list the hub's and the targets' CIDRs.
-# DNS to kube-system is always allowed.
+# match addresses, not names, so list the hub's and the targets' CIDRs. For
+# a target behind a Kubernetes Service, list its ClusterIP as well as its
+# pods: some network plugins (the AWS VPC CNI among them) match the address
+# before the Service translates it. DNS (port 53) is always allowed, to any
+# address.
 networkPolicy:
   enabled: false
   egress: []
