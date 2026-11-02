@@ -50,8 +50,11 @@ write_files:
       [Service]
       ExecStartPre=/bin/bash /var/lib/edge-hub/fetch-tls.sh
       ExecStartPre=-/usr/bin/docker rm -f edge-hub
-      ExecStart=/usr/bin/docker run --rm --name edge-hub --read-only --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --log-driver journald -v /run/edge-hub:/etc/edge-hub:ro ${port_flags} ${image} -config /etc/edge-hub/config.yaml
+      # On stop, the hub drains for its shutdown_grace (15s) while the load
+      # balancers' health checks fail; the timeouts leave room for that.
+      ExecStart=/usr/bin/docker run --rm --name edge-hub --read-only --cap-drop ALL --security-opt no-new-privileges --user 65532:65532 --stop-timeout 30 --log-driver journald -v /run/edge-hub:/etc/edge-hub:ro ${port_flags} ${image} -config /etc/edge-hub/config.yaml
       ExecStop=/usr/bin/docker stop edge-hub
+      TimeoutStopSec=45
       Restart=always
       RestartSec=5
 

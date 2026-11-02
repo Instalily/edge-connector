@@ -10,11 +10,15 @@ import (
 	"time"
 )
 
-// Serve answers /healthz while the process runs and /readyz while ready
+// Serve answers /healthz while live returns true and /readyz while ready
 // returns true, until ctx ends.
-func Serve(ctx context.Context, addr string, ready func() bool, log *slog.Logger) {
+func Serve(ctx context.Context, addr string, live, ready func() bool, log *slog.Logger) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		if !live() {
+			http.Error(w, "shutting down", http.StatusServiceUnavailable)
+			return
+		}
 		w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {

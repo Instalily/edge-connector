@@ -40,6 +40,10 @@ type Config struct {
 	// HealthListen is where /healthz and /readyz are served. Empty disables
 	// them.
 	HealthListen string `yaml:"health_listen"`
+	// ShutdownGrace is how long the hub keeps serving after SIGTERM, with
+	// both health checks failing, before it stops. It must outlast the load
+	// balancers' health checks, so they stop sending it traffic first.
+	ShutdownGrace time.Duration `yaml:"shutdown_grace"`
 }
 
 // Enrollment configures how the hub issues connector certificates. The
@@ -76,6 +80,12 @@ func (c *Config) normalize() error {
 	}
 	if c.OpenTimeout < 0 {
 		return errors.New("open_timeout must be positive")
+	}
+	if c.ShutdownGrace == 0 {
+		c.ShutdownGrace = 15 * time.Second
+	}
+	if c.ShutdownGrace < 0 || c.ShutdownGrace > 5*time.Minute {
+		return errors.New("shutdown_grace must be positive and at most 5m")
 	}
 	if e := c.Enrollment; e != nil {
 		if e.CAKeyFile == "" || e.HubCAFile == "" || e.TokenKeysFile == "" {

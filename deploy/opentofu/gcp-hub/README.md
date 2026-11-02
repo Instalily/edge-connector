@@ -18,6 +18,12 @@ Compute Engine VM on Container-Optimized OS, in the solution's own VPC.
     one stays for `rollout_wait_sec` (15 minutes by default) while
     connectors rotate their tunnels, so some reach the new VM before the old
     one goes.
+  - When a VM stops, its hub first drains for 15 seconds: both health checks
+    fail, so the load balancers stop sending it traffic, while it still
+    serves what arrives.
+  - The wait also applies to the first VM: the instance group reports it as
+    verifying for `rollout_wait_sec` after creation, while it already
+    serves.
 - **Container:** cloud-init installs a systemd unit that, on every start:
   1. reads the three TLS secrets from Secret Manager into tmpfs;
   2. runs the digest-pinned hub image read-only, as UID 65532, with no
@@ -106,11 +112,14 @@ which rolls out a new VM.
 ## Limits
 
 - One VM, so a zone outage interrupts tunnels until the VM is back.
-- A rollout cuts only the connections open through the old VM when it
+- A rollout cuts only the connections still open through the old VM when it
   stops. New endpoint connections go to whichever VM holds a tunnel, and
   connectors (v0.3.0 and later) rotate theirs onto the new VM during
-  `rollout_wait_sec`. Older connectors don't rotate: endpoints fail for
-  about 6 seconds after the old VM stops, until they reconnect.
+  `rollout_wait_sec`. Testing v0.3.0 found 3 failures in 1,791 endpoint
+  calls during a rollout, all as the old VM stopped, before hubs drained on
+  shutdown. Draining is meant to remove those. Older connectors don't rotate:
+  endpoints fail for about 6 seconds after the old VM stops, until they
+  reconnect.
 - Autohealing and `recreate-instances` replace the VM in place, without a
   second one, so endpoints fail until the new VM is up and connectors have
   reconnected: a minute or two.

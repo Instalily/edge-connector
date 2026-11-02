@@ -73,7 +73,7 @@ func main() {
 	}
 	log.Info("starting", "version", version, "hub", cfg.Hub.Address, "proxy", proxyURL, "allow", c.Rules())
 	if cfg.HealthListen != "" {
-		go health.Serve(ctx, cfg.HealthListen, c.Ready, log)
+		go health.Serve(ctx, cfg.HealthListen, func() bool { return true }, c.Ready, log)
 	}
 	c.Run(ctx)
 	log.Info("stopped")

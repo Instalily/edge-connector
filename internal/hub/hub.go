@@ -13,6 +13,7 @@ import (
 	"net"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -50,6 +51,7 @@ type Hub struct {
 	issuer    *issuer // nil without enrollment
 	tunnelLn  net.Listener
 	endpoints []*endpoint
+	draining  atomic.Bool
 
 	mu      sync.Mutex
 	tunnels []*tunnel
@@ -107,8 +109,17 @@ func (h *Hub) Tunnels() int {
 	return len(h.tunnels)
 }
 
-// Ready reports whether at least one connector is connected.
-func (h *Hub) Ready() bool { return h.Tunnels() > 0 }
+// Ready reports whether the hub should get endpoint connections: at least
+// one connector is connected, and it isn't draining.
+func (h *Hub) Ready() bool { return h.Live() && h.Tunnels() > 0 }
+
+// Live reports whether the hub should get new connections at all: false once
+// it is draining.
+func (h *Hub) Live() bool { return !h.draining.Load() }
+
+// Drain makes the hub report itself unhealthy, so load balancers stop sending
+// it connectors and clients, while it keeps serving whatever still arrives.
+func (h *Hub) Drain() { h.draining.Store(true) }
 
 // Serve accepts tunnels and endpoint connections until ctx ends.
 func (h *Hub) Serve(ctx context.Context) {

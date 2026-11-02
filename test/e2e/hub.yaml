@@ -18,3 +18,5 @@ endpoints:
     listen: ":5433"
     target: postgres:5433
 health_listen: ":8080"
+# Compose stops containers after 10s; drain briefly so the test stays quick.
+shutdown_grace: 1s
