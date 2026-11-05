@@ -39,7 +39,14 @@ func issuePKI(t *testing.T, dir string) {
 	must(t, cl.Write(filepath.Join(dir, "connector.crt"), filepath.Join(dir, "connector.key")))
 }
 
+// startHub runs a hub whose connectors give 200ms notice before draining a
+// tunnel.
 func startHub(t *testing.T, ctx context.Context, dir, endpoints string) *hub.Hub {
+	t.Helper()
+	return startHubNotice(t, ctx, dir, endpoints, 200*time.Millisecond)
+}
+
+func startHubNotice(t *testing.T, ctx context.Context, dir, endpoints string, notice time.Duration) *hub.Hub {
 	t.Helper()
 	path := filepath.Join(dir, "hub.yaml")
 	must(t, os.WriteFile(path, fmt.Appendf(nil, `
@@ -50,8 +57,9 @@ tunnel:
     cert_file: %[1]s/hub.crt
     key_file: %[1]s/hub.key
 open_timeout: 5s
+drain_notice: %[3]s
 endpoints:
-%[2]s`, dir, endpoints), 0o600))
+%[2]s`, dir, endpoints, notice), 0o600))
 	cfg, err := hub.Load(path)
 	must(t, err)
 	h, err := hub.New(cfg, logger(t, "hub"))

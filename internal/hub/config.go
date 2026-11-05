@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/Instalily/edge-connector/internal/protocol"
 	"github.com/Instalily/edge-connector/internal/tlsconfig"
 	"github.com/Instalily/edge-connector/internal/yamlfile"
 )
@@ -44,6 +45,11 @@ type Config struct {
 	// both health checks failing, before it stops. It must outlast the load
 	// balancers' health checks, so they stop sending it traffic first.
 	ShutdownGrace time.Duration `yaml:"shutdown_grace"`
+	// DrainNotice is how long connectors keep a tunnel serving after telling
+	// the hub they will drain it. The hub doesn't count such tunnels toward
+	// /readyz, so when they are all it has, the notice must outlast the load
+	// balancer's readiness check for the same reason as ShutdownGrace.
+	DrainNotice time.Duration `yaml:"drain_notice"`
 }
 
 // Enrollment configures how the hub issues connector certificates. The
@@ -86,6 +92,12 @@ func (c *Config) normalize() error {
 	}
 	if c.ShutdownGrace < 0 || c.ShutdownGrace > 5*time.Minute {
 		return errors.New("shutdown_grace must be positive and at most 5m")
+	}
+	if c.DrainNotice == 0 {
+		c.DrainNotice = 15 * time.Second
+	}
+	if c.DrainNotice < 0 || c.DrainNotice > protocol.MaxDrainNotice {
+		return fmt.Errorf("drain_notice must be positive and at most %s", protocol.MaxDrainNotice)
 	}
 	if e := c.Enrollment; e != nil {
 		if e.CAKeyFile == "" || e.HubCAFile == "" || e.TokenKeysFile == "" {
