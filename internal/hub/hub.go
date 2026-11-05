@@ -41,6 +41,9 @@ type tunnel struct {
 	*yamux.Session
 	identity string
 	remote   string
+	// draining is set when the connector gives notice that it will drain
+	// the tunnel. The tunnel still carries streams until then.
+	draining atomic.Bool
 }
 
 // Hub serves one customer's connectors and endpoints.
@@ -109,9 +112,16 @@ func (h *Hub) Tunnels() int {
 	return len(h.tunnels)
 }
 
-// Ready reports whether the hub should get endpoint connections: at least
-// one connector is connected, and it isn't draining.
-func (h *Hub) Ready() bool { return h.Live() && h.Tunnels() > 0 }
+// Ready reports whether the hub should get endpoint connections: it has at
+// least one tunnel that isn't about to drain, and it isn't draining itself.
+func (h *Hub) Ready() bool {
+	if !h.Live() {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.ContainsFunc(h.tunnels, func(t *tunnel) bool { return !t.draining.Load() })
+}
 
 // Live reports whether the hub should get new connections at all: false once
 // it is draining.
@@ -182,7 +192,7 @@ func (h *Hub) handleTunnel(ctx context.Context, raw net.Conn) {
 		defer conn.Close()
 		h.handleRenew(conn, log, identity)
 		return
-	case st.NegotiatedProtocol != protocol.ALPN:
+	case !slices.Contains(protocol.ALPNs, st.NegotiatedProtocol):
 		log.Warn("tunnel rejected", "error", fmt.Sprintf("protocol %q", st.NegotiatedProtocol))
 		conn.Close()
 		return
@@ -197,10 +207,21 @@ func (h *Hub) handleTunnel(ctx context.Context, raw net.Conn) {
 		return
 	}
 	t := &tunnel{Session: sess, identity: identity, remote: raw.RemoteAddr().String()}
+	// A version 2 tunnel's first stream is its control stream, set up before
+	// the tunnel carries anything else.
+	if st.NegotiatedProtocol == protocol.ALPN2 {
+		ctl, err := h.openControl(sess)
+		if err != nil {
+			log.Warn("tunnel rejected", "error", fmt.Errorf("control stream: %w", err))
+			sess.Close()
+			return
+		}
+		go h.watchControl(ctl, t, log)
+	}
 	h.add(t)
 	defer h.remove(t)
 	defer sess.Close()
-	log.Info("tunnel up", "certificate_expires", leaf.NotAfter.UTC().Format(time.RFC3339))
+	log.Info("tunnel up", "protocol", st.NegotiatedProtocol, "certificate_expires", leaf.NotAfter.UTC().Format(time.RFC3339))
 
 	// A tunnel lasts no longer than the certificate that opened it. The
 	// connector reconnects with its renewed one.
@@ -228,6 +249,47 @@ func (h *Hub) handleTunnel(ctx context.Context, raw net.Conn) {
 	log.Info("tunnel down")
 }
 
+// openControl opens a version 2 tunnel's control stream and waits for the
+// connector to accept it.
+func (h *Hub) openControl(sess *yamux.Session) (*yamux.Stream, error) {
+	stream, err := sess.OpenStream()
+	if err != nil {
+		return nil, err
+	}
+	stream.SetDeadline(time.Now().Add(h.cfg.OpenTimeout))
+	req := protocol.Request{Control: &protocol.Control{DrainNoticeMS: h.cfg.DrainNotice.Milliseconds()}}
+	if err := protocol.WriteFrame(stream, req); err != nil {
+		stream.Close()
+		return nil, err
+	}
+	var resp protocol.Response
+	if err := protocol.ReadFrame(stream, &resp); err != nil {
+		stream.Close()
+		return nil, err
+	}
+	if !resp.OK {
+		stream.Close()
+		return nil, &RefusedError{Code: resp.Error}
+	}
+	stream.SetDeadline(time.Time{})
+	return stream, nil
+}
+
+// watchControl marks t draining when its connector gives notice, until the
+// control stream closes.
+func (h *Hub) watchControl(ctl *yamux.Stream, t *tunnel, log *slog.Logger) {
+	defer ctl.Close()
+	for {
+		var n protocol.Notice
+		if err := protocol.ReadFrame(ctl, &n); err != nil {
+			return
+		}
+		if n.Draining && !t.draining.Swap(true) {
+			log.Info("tunnel draining", "notice", h.cfg.DrainNotice.String())
+		}
+	}
+}
+
 func (h *Hub) handleClient(ctx context.Context, ep *endpoint, conn net.Conn) {
 	defer conn.Close()
 	log := h.log.With("endpoint", ep.Name, "target", ep.Target, "client", conn.RemoteAddr().String())
@@ -251,11 +313,7 @@ func (h *Hub) handleClient(ctx context.Context, ep *endpoint, conn net.Conn) {
 // customer enforces the same allowlist.
 func (h *Hub) open(ctx context.Context, target string) (*yamux.Stream, string, error) {
 	var lastErr error = ErrNoTunnel
-	for range max(h.Tunnels(), 1) {
-		t := h.pick()
-		if t == nil {
-			break
-		}
+	for _, t := range h.candidates() {
 		stream, err := h.request(ctx, t, target)
 		var refused *RefusedError
 		if err == nil || errors.As(err, &refused) {
@@ -293,18 +351,24 @@ func (h *Hub) request(ctx context.Context, t *tunnel, target string) (*yamux.Str
 	return stream, nil
 }
 
-// pick returns the next open tunnel, round-robin.
-func (h *Hub) pick() *tunnel {
+// candidates lists the open tunnels to try for a stream, round-robin, with
+// those about to drain last.
+func (h *Hub) candidates() []*tunnel {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	for range len(h.tunnels) {
-		t := h.tunnels[h.next%len(h.tunnels)]
-		h.next++
-		if !t.IsClosed() {
-			return t
+	var staying, draining []*tunnel
+	for i := range len(h.tunnels) {
+		t := h.tunnels[(h.next+i)%len(h.tunnels)]
+		switch {
+		case t.IsClosed():
+		case t.draining.Load():
+			draining = append(draining, t)
+		default:
+			staying = append(staying, t)
 		}
 	}
-	return nil
+	h.next++
+	return append(staying, draining...)
 }
 
 func (h *Hub) add(t *tunnel) {

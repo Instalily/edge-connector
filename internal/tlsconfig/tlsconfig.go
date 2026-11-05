@@ -1,5 +1,5 @@
 // Package tlsconfig builds the TLS configurations for both ends of a tunnel:
-// TLS 1.3 only, certificates on both sides, and the protocol's ALPN.
+// TLS 1.3 only, certificates on both sides, and the protocol's ALPNs.
 package tlsconfig
 
 import (
@@ -30,7 +30,7 @@ func Client(f Files, serverName string) (*tls.Config, error) {
 		MinVersion: tls.VersionTLS13,
 		RootCAs:    pool,
 		ServerName: serverName,
-		NextProtos: []string{protocol.ALPN},
+		NextProtos: protocol.ALPNs,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			return f.keyPair()
 		},
@@ -48,7 +48,7 @@ func Server(f Files) (*tls.Config, error) {
 		MinVersion: tls.VersionTLS13,
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		ClientCAs:  pool,
-		NextProtos: []string{protocol.ALPN},
+		NextProtos: protocol.ALPNs,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return f.keyPair()
 		},

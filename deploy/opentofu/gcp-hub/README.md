@@ -115,11 +115,17 @@ which rolls out a new VM.
 - A rollout cuts only the connections still open through the old VM when it
   stops. New endpoint connections go to whichever VM holds a tunnel, and
   connectors (v0.3.0 and later) rotate theirs onto the new VM during
-  `rollout_wait_sec`. Testing v0.3.0 found 3 failures in 1,791 endpoint
-  calls during a rollout, all as the old VM stopped, before hubs drained on
-  shutdown. Draining is meant to remove those. Older connectors don't rotate:
-  endpoints fail for about 6 seconds after the old VM stops, until they
-  reconnect.
+  `rollout_wait_sec`. Sandbox rollouts with two connectors and an endpoint
+  call every half second:
+  - v0.3.0: 3 failures in 1,791 calls, all as the old VM stopped. Hubs
+    drain on shutdown since v0.4.0 to prevent these.
+  - v0.4.0: 0 failures as the old VM stopped, but 4 in 2,616 during the
+    wait. A rotation took the old VM's last tunnel, and the internal load
+    balancer kept sending it calls for about 4 seconds, until `/readyz`
+    failed. Since v0.5.0, connectors give the hub notice first, so it fails
+    `/readyz` while it can still serve; this needs v0.5.0 on both sides.
+  - Older connectors don't rotate: endpoints fail for about 6 seconds after
+    the old VM stops, until they reconnect.
 - Autohealing and `recreate-instances` replace the VM in place, without a
   second one, so endpoints fail until the new VM is up and connectors have
   reconnected: a minute or two.

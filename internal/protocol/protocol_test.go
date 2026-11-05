@@ -38,3 +38,17 @@ func TestReadFrameRejectsBadLengths(t *testing.T) {
 		}
 	}
 }
+
+func TestControlRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteFrame(&buf, Request{Control: &Control{DrainNoticeMS: 15000}}); err != nil {
+		t.Fatal(err)
+	}
+	var got Request
+	if err := ReadFrame(&buf, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Control == nil || got.Control.DrainNoticeMS != 15000 || got.Target != "" {
+		t.Fatalf("got %+v", got)
+	}
+}

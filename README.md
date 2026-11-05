@@ -38,7 +38,8 @@ These are the properties a customer's security review will ask about.
   certificates. Each customer has its own CAs: a hub accepts only connectors
   whose certificates its connector CA issued, optionally only named ones
   (`allowed_identities`), and connectors verify the hub against its hub CA.
-  The protocol version is negotiated with ALPN.
+  The protocol version is negotiated with ALPN: `edge-connector/2` when both
+  sides support it, else `edge-connector/1`.
 - **Keys stay where they're used.** An enrolling connector generates its own
   key, and Instalily never sees it. Its certificates last 7 days and renew
   automatically, and a tunnel never outlives the certificate that opened it.
@@ -85,7 +86,7 @@ hub:
   address: acme.connect.instalily.ai:443
   server_name: ""        # name to verify on the hub's certificate; defaults to address's host
   connections: 2         # tunnels to keep open
-  rotate_after: 5m       # replace each tunnel about this often, opening the new one first
+  rotate_after: 5m       # replace each tunnel about this often; see "Tunnel rotation"
 state_dir: /var/lib/edge-connector         # enrolled key, certificate and hub CA; must persist
 enrollment:
   token_file: /etc/edge-connector/token    # needed only until the first enrollment
@@ -126,11 +127,34 @@ endpoints:
 open_timeout: 15s
 health_listen: ":8080"
 shutdown_grace: 15s   # on SIGTERM, fail both health checks but keep serving this long
+drain_notice: 15s     # how long connectors keep a tunnel serving after giving notice
 ```
 
 Both files are read strictly: a misspelled key is an error, not an ignored
 setting. Certificates are read again on every handshake, so a rotated
 certificate takes effect on the next connection without a restart.
+
+### Tunnel rotation
+
+Each tunnel lasts about `rotate_after`, give or take a quarter, and never past
+shortly before its certificate expires. Behind a load balancer, rotation is
+what moves tunnels onto a hub's new instance during a rollout. A connector
+replaces a tunnel in this order:
+
+1. It opens the replacement tunnel.
+2. It gives the hub notice on the old tunnel's control stream. The hub stops
+   counting that tunnel toward `/readyz`, but still uses it if it has no
+   other. If it was the hub's last tunnel, the hub fails `/readyz`, and its
+   load balancer stops sending it clients.
+3. It keeps serving the old tunnel for the hub's `drain_notice`, so that
+   happens before the tunnel goes.
+4. It sends yamux GoAway, so the hub opens no more streams there, and closes
+   the tunnel once its streams finish.
+
+Steps 2 and 3 need `edge-connector/2` on both sides (v0.5.0 and later). With
+an older hub or connector, the connector skips them, and a hub that loses its
+last tunnel fails clients until its readiness check catches up: up to 10
+seconds behind the gcp-hub module's load balancer.
 
 ## Deploying a hub
 
@@ -206,9 +230,10 @@ Connectors get their own certificates:
 5. At two thirds of the certificate's lifetime, the connector renews it with
    a new key, authenticating with the current certificate (ALPN
    `edge-renew/1`). Shortly before the old certificate expires, the connector
-   rotates any tunnel still using it: it opens a new tunnel with the renewed
-   certificate, then lets the old one drain. The hub closes any tunnel whose
-   certificate has expired regardless.
+   rotates any tunnel still using it onto the renewed certificate (see
+   [Tunnel rotation](#tunnel-rotation)), shortening the notice if it would
+   run past the expiry. The hub closes any tunnel whose certificate has
+   expired regardless.
 
 A connector offline for longer than its certificate lasts needs a new token.
 To revoke a connector, remove its identity from `allowed_identities`: the hub

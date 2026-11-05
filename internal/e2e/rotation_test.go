@@ -23,7 +23,7 @@ func TestTunnelRotation(t *testing.T) {
 `, echo))
 	// Count the tunnels the connector opens on the way to the hub.
 	var opened atomic.Int32
-	front := forward(t, h.TunnelAddr(), &opened)
+	front := forward(t, h.TunnelAddr, &opened)
 	startConnector(t, ctx, dir, dir, front, fmt.Sprintf(`
   - {cidr: 127.0.0.1/32, ports: [%s]}
 `, echoPort), time.Second)
@@ -74,8 +74,9 @@ func echoLine(t *testing.T, conn net.Conn, s string) {
 	}
 }
 
-// forward relays TCP connections to target, counting them.
-func forward(t *testing.T, target net.Addr, count *atomic.Int32) net.Addr {
+// forward relays TCP connections to the address target returns as each
+// arrives, counting them.
+func forward(t *testing.T, target func() net.Addr, count *atomic.Int32) net.Addr {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	must(t, err)
@@ -89,7 +90,7 @@ func forward(t *testing.T, target net.Addr, count *atomic.Int32) net.Addr {
 			count.Add(1)
 			go func() {
 				defer c.Close()
-				up, err := net.Dial("tcp", target.String())
+				up, err := net.Dial("tcp", target().String())
 				if err != nil {
 					return
 				}

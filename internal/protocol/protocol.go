@@ -9,6 +9,13 @@
 // the hub, naming a target as host:port, and one response frame from the
 // connector. After an OK response the stream carries the target connection's
 // bytes unchanged in both directions.
+//
+// Version 2 adds a control stream. On a tunnel that negotiated it, the hub's
+// first stream is a request with Control set instead of a target. After an
+// OK response the connector keeps it open, and writes a Notice before it
+// drains the tunnel. It then keeps serving the tunnel for the notice period
+// the hub asked for, so the hub can fail its readiness check and its load
+// balancer can stop sending it clients before the tunnel goes.
 package protocol
 
 import (
@@ -23,8 +30,15 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// ALPN is the protocol version both sides must negotiate.
-const ALPN = "edge-connector/1"
+// ALPN protocol versions, newest first. Both sides offer all of them and use
+// the newest they share.
+const (
+	ALPN2 = "edge-connector/2"
+	ALPN  = "edge-connector/1"
+)
+
+// ALPNs is what both sides offer.
+var ALPNs = []string{ALPN2, ALPN}
 
 // MaxFrame bounds a frame's JSON body, so neither side can make the other
 // buffer an arbitrary amount before a stream is established.
@@ -34,7 +48,25 @@ const MaxFrame = 4096
 // dials inside the customer network.
 type Request struct {
 	Target string `json:"target"`
+	// Control, sent only on a version 2 tunnel, opens its control stream.
+	Control *Control `json:"control,omitempty"`
 }
+
+// Control opens a tunnel's control stream.
+type Control struct {
+	// DrainNoticeMS is how long, in milliseconds, the connector keeps the
+	// tunnel serving after its Notice.
+	DrainNoticeMS int64 `json:"drain_notice_ms"`
+}
+
+// Notice is what the connector writes on the control stream before it drains
+// the tunnel.
+type Notice struct {
+	Draining bool `json:"draining"`
+}
+
+// MaxDrainNotice bounds the notice period a hub may ask for.
+const MaxDrainNotice = 5 * time.Minute
 
 // Response answers a Request. Error is one of the Err codes when OK is false.
 type Response struct {

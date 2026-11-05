@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -139,6 +140,12 @@ func (c *Connector) maintain(ctx context.Context, slot int) {
 type tunnel struct {
 	sess     *yamux.Session
 	rotateAt time.Time
+	// ctl is the control stream of a version 2 tunnel, or nil. Before
+	// draining the tunnel, the connector gives notice on it and keeps
+	// serving for notice, but not past expires.
+	ctl     *yamux.Stream
+	notice  time.Duration
+	expires time.Time
 }
 
 func (c *Connector) open(ctx context.Context, slot int) (*tunnel, error) {
@@ -157,18 +164,58 @@ func (c *Connector) open(ctx context.Context, slot int) (*tunnel, error) {
 		raw.Close()
 		return nil, fmt.Errorf("tls handshake: %w", err)
 	}
-	if p := conn.ConnectionState().NegotiatedProtocol; p != protocol.ALPN {
+	proto := conn.ConnectionState().NegotiatedProtocol
+	if !slices.Contains(protocol.ALPNs, proto) {
 		conn.Close()
-		return nil, fmt.Errorf("hub negotiated protocol %q, want %q", p, protocol.ALPN)
+		return nil, fmt.Errorf("hub negotiated protocol %q, want one of %q", proto, protocol.ALPNs)
 	}
 	sess, err := yamux.Client(conn, protocol.YamuxConfig(c.log))
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
+	t := &tunnel{sess: sess, rotateAt: c.rotateAt(cert)}
+	if cert != nil {
+		t.expires = cert.NotAfter
+	}
+	if proto == protocol.ALPN2 {
+		if t.ctl, t.notice, err = acceptControl(dctx, sess); err != nil {
+			sess.Close()
+			return nil, fmt.Errorf("control stream: %w", err)
+		}
+	}
 	c.tunnels.Add(1)
-	c.log.Info("tunnel up", "slot", slot, "hub", c.cfg.Hub.Address)
-	return &tunnel{sess: sess, rotateAt: c.rotateAt(cert)}, nil
+	c.log.Info("tunnel up", "slot", slot, "hub", c.cfg.Hub.Address, "protocol", proto)
+	return t, nil
+}
+
+// acceptControl accepts a version 2 tunnel's control stream, the first stream
+// the hub opens, and returns it with the notice period the hub asks for.
+func acceptControl(ctx context.Context, sess *yamux.Session) (*yamux.Stream, time.Duration, error) {
+	stream, err := sess.AcceptStreamWithContext(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		stream.SetDeadline(dl)
+	}
+	var req protocol.Request
+	if err := protocol.ReadFrame(stream, &req); err != nil {
+		stream.Close()
+		return nil, 0, err
+	}
+	if req.Control == nil {
+		reply(stream, protocol.ErrBadRequest)
+		stream.Close()
+		return nil, 0, errors.New("the hub's first stream is not a control request")
+	}
+	if err := protocol.WriteFrame(stream, protocol.Response{OK: true}); err != nil {
+		stream.Close()
+		return nil, 0, err
+	}
+	stream.SetDeadline(time.Time{})
+	notice := time.Duration(req.Control.DrainNoticeMS) * time.Millisecond
+	return stream, min(max(notice, 0), protocol.MaxDrainNotice), nil
 }
 
 // rotateAt picks when a new tunnel rotates: after about RotateAfter, give or
@@ -233,12 +280,29 @@ func (c *Connector) run(ctx context.Context, slot int, t *tunnel) (*tunnel, erro
 }
 
 // drain stops the hub opening streams on a replaced tunnel, and closes it once
-// the streams it carries finish. The hub closes it anyway when its
-// certificate expires.
+// the streams it carries finish. On a version 2 tunnel it first gives the hub
+// notice and keeps serving for the notice period, so the hub's load balancer
+// can stop sending it clients if this was its last tunnel. The hub closes the
+// tunnel anyway when its certificate expires.
 func (c *Connector) drain(slot int, t *tunnel, closed <-chan error, stop func() bool) {
 	defer stop()
+	if t.ctl != nil {
+		if err := protocol.WriteFrame(t.ctl, protocol.Notice{Draining: true}); err == nil {
+			wait := t.notice
+			if !t.expires.IsZero() {
+				wait = min(wait, time.Until(t.expires))
+			}
+			c.log.Info("tunnel draining", "slot", slot, "notice", wait.Round(time.Millisecond).String())
+			select {
+			case <-closed:
+				return
+			case <-time.After(wait):
+			}
+		}
+		t.ctl.Close()
+	}
 	t.sess.GoAway()
-	tick := time.NewTicker(time.Second)
+	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for t.sess.NumStreams() > 0 {
 		select {
@@ -278,6 +342,11 @@ func (c *Connector) serve(ctx context.Context, stream *yamux.Stream) {
 	var req protocol.Request
 	if err := protocol.ReadFrame(stream, &req); err != nil {
 		log.Warn("stream refused", "reason", protocol.ErrBadRequest, "error", err)
+		return
+	}
+	if req.Control != nil {
+		log.Warn("stream refused", "reason", protocol.ErrBadRequest, "error", "unexpected control request")
+		reply(stream, protocol.ErrBadRequest)
 		return
 	}
 	log = log.With("target", req.Target)
