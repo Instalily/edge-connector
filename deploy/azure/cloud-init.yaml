@@ -1,0 +1,88 @@
+#cloud-config
+# Turns a fresh Ubuntu 24.04 VM into an edge connector: installs Docker,
+# writes the connector's files to /opt/edge-connector, starts it, and empties
+# the enrollment token once the connector has enrolled.
+#
+# azuredeploy.bicep fills the three placeholders, each written as its name
+# between double @ signs. To use this file elsewhere, replace them by hand:
+#   IMAGE   the connector image, pinned by digest
+#   CONFIG  the connector configuration, as one line of JSON
+#   TOKEN   the enrollment token from Instalily
+#
+# The VM needs outbound HTTPS to the Ubuntu package mirrors, public.ecr.aws and
+# the hub.
+
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+
+write_files:
+  - path: /opt/edge-connector/.env
+    permissions: "0644"
+    content: |
+      EDGE_CONNECTOR_IMAGE=@@IMAGE@@
+  - path: /opt/edge-connector/config.yaml
+    permissions: "0644"
+    content: |
+      @@CONFIG@@
+  # Only the container's user (UID 65532) may read the token; runcmd sets the
+  # owner, because write_files runs before that user could be named.
+  - path: /opt/edge-connector/token
+    permissions: "0400"
+    content: |
+      @@TOKEN@@
+  - path: /opt/edge-connector/docker-compose.yml
+    permissions: "0644"
+    content: |
+      services:
+        connector:
+          image: ${EDGE_CONNECTOR_IMAGE:?set EDGE_CONNECTOR_IMAGE in .env}
+          command: ["-config", "/etc/edge-connector/config.yaml"]
+          restart: unless-stopped
+          read_only: true
+          cap_drop: [ALL]
+          security_opt: ["no-new-privileges:true"]
+          volumes:
+            - ./config.yaml:/etc/edge-connector/config.yaml:ro
+            - ./token:/etc/edge-connector/token:ro
+            - state:/var/lib/edge-connector
+          healthcheck:
+            # Healthy while at least one tunnel to the hub is open.
+            test: ["CMD", "/usr/local/bin/edge-connector", "-probe", "http://127.0.0.1:8080/readyz"]
+            interval: 30s
+          logging:
+            driver: json-file
+            options:
+              max-size: 50m
+              max-file: "5"
+      volumes:
+        state: {}
+  - path: /usr/local/sbin/edge-connector-clear-token
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Empties the token once the connector has enrolled: its key and
+      # certificate are then in the state volume, and it renews them itself.
+      # The file stays, empty, because Docker would mount a directory in its
+      # place if it were missing.
+      cd /opt/edge-connector || exit 1
+      i=0
+      while [ "$i" -lt 360 ]; do
+        if docker compose logs connector 2>/dev/null | grep -q '"msg":"enrolled"'; then
+          truncate -s 0 token
+          echo "connector enrolled; token emptied"
+          exit 0
+        fi
+        i=$((i + 1))
+        sleep 10
+      done
+      echo "connector did not enroll within an hour; see: docker compose logs connector" >&2
+      exit 1
+
+runcmd:
+  - chown 65532:65532 /opt/edge-connector/token
+  - systemctl enable --now docker
+  - cd /opt/edge-connector && docker compose up -d
+  # A transient unit, so cloud-init finishes without waiting for enrollment.
+  - systemd-run --unit edge-connector-clear-token /usr/local/sbin/edge-connector-clear-token

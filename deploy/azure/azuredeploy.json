@@ -1,0 +1,225 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.31.92.45157",
+      "templateHash": "12547712885024693184"
+    }
+  },
+  "parameters": {
+    "hubAddress": {
+      "type": "string",
+      "metadata": {
+        "description": "Hub address from Instalily, as IP:port, e.g. 203.0.113.10:443."
+      }
+    },
+    "enrollmentToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Enrollment token from Instalily. It is valid for 24 hours by default; ask for a new one if it has expired."
+      }
+    },
+    "allow": {
+      "type": "array",
+      "metadata": {
+        "description": "Targets Instalily may reach, as JSON. Each entry is a \"cidr\" (a range or one IP) or a \"host\" (a name, or \"*.corp.example\" for any name under it), with \"ports\". Example: [{\"cidr\": \"10.1.2.3\", \"ports\": [1433]}]"
+      }
+    },
+    "virtualNetworkName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing virtual network for the VM. Its subnet must route to the targets and allow outbound HTTPS."
+      }
+    },
+    "virtualNetworkResourceGroup": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group of the virtual network. Leave empty if it is this deployment's resource group."
+      }
+    },
+    "subnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the subnet for the VM."
+      }
+    },
+    "vmName": {
+      "type": "string",
+      "defaultValue": "edge-connector",
+      "maxLength": 64,
+      "metadata": {
+        "description": "Name of the VM and the prefix of its disk, network interface and security group."
+      }
+    },
+    "vmSize": {
+      "type": "string",
+      "defaultValue": "Standard_B2s",
+      "metadata": {
+        "description": "VM size. The connector needs little; Standard_B2s leaves headroom."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region. Defaults to the resource group's."
+      }
+    },
+    "connectorImage": {
+      "type": "string",
+      "defaultValue": "public.ecr.aws/s9u8g9q7/edge-connector@sha256:2473f9b660218932ec4f93b5651d7a64fb922748ec4df42a5e75a564717d2cee",
+      "metadata": {
+        "description": "Connector image, pinned by digest. Instalily sends a new one for each upgrade."
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "defaultValue": "[format('{0}Aa1!', newGuid())]",
+      "metadata": {
+        "description": "Leave as generated. Nobody needs it; see the template's comments."
+      }
+    }
+  },
+  "variables": {
+    "$fxv#0": "#cloud-config\n# Turns a fresh Ubuntu 24.04 VM into an edge connector: installs Docker,\n# writes the connector's files to /opt/edge-connector, starts it, and empties\n# the enrollment token once the connector has enrolled.\n#\n# azuredeploy.bicep fills the three placeholders, each written as its name\n# between double @ signs. To use this file elsewhere, replace them by hand:\n#   IMAGE   the connector image, pinned by digest\n#   CONFIG  the connector configuration, as one line of JSON\n#   TOKEN   the enrollment token from Instalily\n#\n# The VM needs outbound HTTPS to the Ubuntu package mirrors, public.ecr.aws and\n# the hub.\n\npackage_update: true\npackages:\n  - docker.io\n  - docker-compose-v2\n\nwrite_files:\n  - path: /opt/edge-connector/.env\n    permissions: \"0644\"\n    content: |\n      EDGE_CONNECTOR_IMAGE=@@IMAGE@@\n  - path: /opt/edge-connector/config.yaml\n    permissions: \"0644\"\n    content: |\n      @@CONFIG@@\n  # Only the container's user (UID 65532) may read the token; runcmd sets the\n  # owner, because write_files runs before that user could be named.\n  - path: /opt/edge-connector/token\n    permissions: \"0400\"\n    content: |\n      @@TOKEN@@\n  - path: /opt/edge-connector/docker-compose.yml\n    permissions: \"0644\"\n    content: |\n      services:\n        connector:\n          image: ${EDGE_CONNECTOR_IMAGE:?set EDGE_CONNECTOR_IMAGE in .env}\n          command: [\"-config\", \"/etc/edge-connector/config.yaml\"]\n          restart: unless-stopped\n          read_only: true\n          cap_drop: [ALL]\n          security_opt: [\"no-new-privileges:true\"]\n          volumes:\n            - ./config.yaml:/etc/edge-connector/config.yaml:ro\n            - ./token:/etc/edge-connector/token:ro\n            - state:/var/lib/edge-connector\n          healthcheck:\n            # Healthy while at least one tunnel to the hub is open.\n            test: [\"CMD\", \"/usr/local/bin/edge-connector\", \"-probe\", \"http://127.0.0.1:8080/readyz\"]\n            interval: 30s\n          logging:\n            driver: json-file\n            options:\n              max-size: 50m\n              max-file: \"5\"\n      volumes:\n        state: {}\n  - path: /usr/local/sbin/edge-connector-clear-token\n    permissions: \"0755\"\n    content: |\n      #!/bin/sh\n      # Empties the token once the connector has enrolled: its key and\n      # certificate are then in the state volume, and it renews them itself.\n      # The file stays, empty, because Docker would mount a directory in its\n      # place if it were missing.\n      cd /opt/edge-connector || exit 1\n      i=0\n      while [ \"$i\" -lt 360 ]; do\n        if docker compose logs connector 2>/dev/null | grep -q '\"msg\":\"enrolled\"'; then\n          truncate -s 0 token\n          echo \"connector enrolled; token emptied\"\n          exit 0\n        fi\n        i=$((i + 1))\n        sleep 10\n      done\n      echo \"connector did not enroll within an hour; see: docker compose logs connector\" >&2\n      exit 1\n\nruncmd:\n  - chown 65532:65532 /opt/edge-connector/token\n  - systemctl enable --now docker\n  - cd /opt/edge-connector && docker compose up -d\n  # A transient unit, so cloud-init finishes without waiting for enrollment.\n  - systemd-run --unit edge-connector-clear-token /usr/local/sbin/edge-connector-clear-token\n",
+    "subnetId": "[resourceId(if(empty(parameters('virtualNetworkResourceGroup')), resourceGroup().name, parameters('virtualNetworkResourceGroup')), 'Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]",
+    "config": {
+      "hub": {
+        "address": "[parameters('hubAddress')]",
+        "connections": 2
+      },
+      "state_dir": "/var/lib/edge-connector",
+      "enrollment": {
+        "token_file": "/etc/edge-connector/token"
+      },
+      "allow": "[parameters('allow')]",
+      "health_listen": "127.0.0.1:8080"
+    },
+    "cloudInit": "[replace(replace(replace(variables('$fxv#0'), '@@IMAGE@@', parameters('connectorImage')), '@@CONFIG@@', string(variables('config'))), '@@TOKEN@@', parameters('enrollmentToken'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}-nsg', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "deny-all-inbound",
+            "properties": {
+              "description": "The connector accepts no connections; it only dials out.",
+              "priority": 4096,
+              "direction": "Inbound",
+              "access": "Deny",
+              "protocol": "*",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "*"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}-nic', parameters('vmName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "networkSecurityGroup": {
+          "id": "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('vmName')))]"
+        },
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('subnetId')]"
+              }
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', format('{0}-nsg', parameters('vmName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines",
+      "apiVersion": "2024-07-01",
+      "name": "[parameters('vmName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('vmSize')]"
+        },
+        "securityProfile": {
+          "securityType": "TrustedLaunch",
+          "uefiSettings": {
+            "secureBootEnabled": true,
+            "vTpmEnabled": true
+          }
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "Canonical",
+            "offer": "ubuntu-24_04-lts",
+            "sku": "server",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "[format('{0}-osdisk', parameters('vmName'))]",
+            "createOption": "FromImage",
+            "deleteOption": "Delete",
+            "managedDisk": {
+              "storageAccountType": "StandardSSD_LRS"
+            }
+          }
+        },
+        "osProfile": {
+          "computerName": "[parameters('vmName')]",
+          "adminUsername": "edgeadmin",
+          "adminPassword": "[parameters('adminPassword')]",
+          "customData": "[base64(variables('cloudInit'))]",
+          "linuxConfiguration": {
+            "disablePasswordAuthentication": false
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]",
+              "properties": {
+                "deleteOption": "Delete"
+              }
+            }
+          ]
+        },
+        "diagnosticsProfile": {
+          "bootDiagnostics": {
+            "enabled": true
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "vmName": {
+      "type": "string",
+      "value": "[parameters('vmName')]"
+    },
+    "privateIp": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Network/networkInterfaces', format('{0}-nic', parameters('vmName'))), '2024-01-01').ipConfigurations[0].properties.privateIPAddress]"
+    }
+  }
+}

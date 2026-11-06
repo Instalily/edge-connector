@@ -194,6 +194,10 @@ release's hub digest.
     by themselves.
 - **Docker / VM:** [`deploy/compose`](deploy/compose). The token is a file, and
   the state is a named volume.
+- **Azure VM:** [`deploy/azure`](deploy/azure). A template for one Ubuntu VM
+  that sets itself up at first boot with cloud-init: the customer fills in a
+  portal form and never signs in to the VM. The cloud-init file also works on
+  its own, on any Ubuntu 24.04 VM.
 
 ## Certificates and enrollment
 
@@ -353,5 +357,6 @@ can reach. It checks that:
 - **Hub deployment outside GCP.** GCP hubs deploy with
   [`deploy/opentofu/gcp-hub`](deploy/opentofu/gcp-hub). Hubs move to the
   Platform clusters later, along with the solutions.
-- **VM image.** Still to build: a Packer image running the connector as a
-  systemd unit, for customers without containers.
+- **VM image.** Azure VMs set themselves up from cloud-init
+  ([`deploy/azure`](deploy/azure)). Still to build: pre-built images for each
+  cloud and for VMware, so first boot doesn't need to install Docker.
