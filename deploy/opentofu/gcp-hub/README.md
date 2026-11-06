@@ -124,6 +124,9 @@ which rolls out a new VM.
     balancer kept sending it calls for about 4 seconds, until `/readyz`
     failed. Since v0.5.0, connectors give the hub notice first, so it fails
     `/readyz` while it can still serve; this needs v0.5.0 on both sides.
+  - v0.5.0 on both sides: 0 failures in 3,474 calls, through the 17-minute
+    wait (24 rotations, each with a 15-second notice) and as the old VM
+    stopped with 4 tunnels still on it.
   - Older connectors don't rotate: endpoints fail for about 6 seconds after
     the old VM stops, until they reconnect.
 - Autohealing and `recreate-instances` replace the VM in place, without a
