@@ -29,9 +29,11 @@ jq --arg hub '<hub IP>:443' --argjson allow '[{"cidr": "10.1.2.3", "ports": [143
   azuredeploy.json > azuredeploy-<customer>.json
 ```
 
-The repository is private, so a "Deploy to Azure" button, which opens the
-portal on a template at a public URL, needs the file hosted somewhere public
-first. Until then the customer loads the file in the portal, as below.
+A pre-filled copy is a file, so the customer loads it in the portal, as
+below. Without one, this button opens the same form on the template in `main`,
+and the customer types the hub address and allowlist themselves:
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FInstalily%2Fedge-connector%2Fmain%2Fdeploy%2Fazure%2Fazuredeploy.json)
 
 ## Deploying
 
