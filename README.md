@@ -360,3 +360,8 @@ can reach. It checks that:
 - **VM image.** Azure VMs set themselves up from cloud-init
   ([`deploy/azure`](deploy/azure)). Still to build: pre-built images for each
   cloud and for VMware, so first boot doesn't need to install Docker.
+
+## Security and license
+
+Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
+The edge connector is licensed under the [Apache License 2.0](LICENSE).
