@@ -97,3 +97,65 @@ jobs:
 
       - name: Run
         run: test/e2e/run.sh
+
+  # Biome and Gitleaks: the organization requires both on every repository
+  # through workflows in Instalily/standard, which is internal, and GitHub
+  # doesn't run an internal repository's workflows for a public one. They run
+  # here instead, at the same versions, and edge-connector is excluded from the
+  # organization rulesets. Only GitHub-owned actions are allowed here, so each
+  # downloads its pinned release and checks it.
+  biome:
+    name: Biome
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BIOME_VERSION: "2.5.1"
+      BIOME_SHA256: beb442e5c9bea7f52ae6d6eb6ae4819388a8b590492d6706b9dfffca8088f066
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Biome
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/biome" \
+            "https://github.com/biomejs/biome/releases/download/@biomejs/biome@${BIOME_VERSION}/biome-linux-x64"
+          echo "${BIOME_SHA256}  $RUNNER_TEMP/biome" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/biome"
+
+      # Read-only: formats and lints per biome.json, and never writes.
+      - name: Check
+        run: '"$RUNNER_TEMP/biome" ci .'
+
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.24.3"
+      GITLEAKS_SHA256: 9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tar.gz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+
+      # A pull request's own commits, as the organization workflow scans them;
+      # a push to main or a release scans the whole history.
+      - name: Scan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            set -- --log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"
+          fi
+          "$RUNNER_TEMP/gitleaks" detect --redact -v --exit-code=2 "$@"
