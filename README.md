@@ -355,3 +355,8 @@ can reach. It checks that:
   Platform clusters later, along with the solutions.
 - **VM image.** Still to build: a Packer image running the connector as a
   systemd unit, for customers without containers.
+
+## Security and license
+
+Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
+The edge connector is licensed under the [Apache License 2.0](LICENSE).
