@@ -98,7 +98,7 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
   }
 }
 
-resource nic 'Microsoft.Network/networkInterfaces@2024-01-01' = {
+resource nic 'Microsoft.Network/networkInterfaces@2024-05-01' = {
   name: '${vmName}-nic'
   location: location
   properties: {
