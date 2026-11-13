@@ -1,6 +1,10 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
 	"files": {
-		"includes": ["**", "!deploy/azure/azuredeploy.json"]
+		"includes": [
+			"**",
+			"!deploy/azure/azuredeploy.json",
+			"!deploy/azure-container-apps/azuredeploy.json"
+		]
 	}
 }

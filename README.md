@@ -198,6 +198,10 @@ release's hub digest.
   that sets itself up at first boot with cloud-init: the customer fills in a
   portal form and never signs in to the VM. The cloud-init file also works on
   its own, on any Ubuntu 24.04 VM.
+- **Azure Container Apps:** [`deploy/azure-container-apps`](deploy/azure-container-apps).
+  The same portal form, for customers who prefer a managed container to a VM.
+  It needs an empty subnet delegated to Container Apps, and keeps the
+  connector's key on an Azure Files share.
 
 ## Certificates and enrollment
 
