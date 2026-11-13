@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 #
 # docker build --target connector -t edge-connector .
 # docker build --target hub -t edge-hub .
@@ -9,7 +9,7 @@
 # stage runs on the builder's own platform and cross-compiles, so multi-arch
 # images need no emulation.
 
-FROM --platform=$BUILDPLATFORM golang:1.26.10 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.10@sha256:cfa27959837144bf4649802ba38e59daffd0dd2a7994aa83daaf113285b0f551 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -20,12 +20,12 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/ ./cmd/... \
  && mkdir /out/state
 
-FROM gcr.io/distroless/static-debian12:nonroot AS hub
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS hub
 COPY --from=build /out/hub /usr/local/bin/edge-hub
 COPY --from=build /out/edgectl /usr/local/bin/edgectl
 ENTRYPOINT ["/usr/local/bin/edge-hub"]
 
-FROM gcr.io/distroless/static-debian12:nonroot AS connector
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS connector
 COPY --from=build /out/connector /usr/local/bin/edge-connector
 # An enrolled connector's state_dir. A new volume mounted here starts out
 # owned by the non-root user, as Docker copies the directory's ownership.
