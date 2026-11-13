@@ -1,0 +1,275 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.31.92.45157",
+      "templateHash": "15034888849401681540"
+    }
+  },
+  "parameters": {
+    "hubAddress": {
+      "type": "string",
+      "metadata": {
+        "description": "Hub address from Instalily, as IP:port, e.g. 203.0.113.10:443."
+      }
+    },
+    "enrollmentToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Enrollment token from Instalily. It is valid for 24 hours by default; ask for a new one if it has expired."
+      }
+    },
+    "allow": {
+      "type": "array",
+      "metadata": {
+        "description": "Targets Instalily may reach, as JSON. Each entry is a \"cidr\" (a range or one IP) or a \"host\" (a name, or \"*.corp.example\" for any name under it), with \"ports\". Example: [{\"cidr\": \"10.1.2.3\", \"ports\": [1433]}]"
+      }
+    },
+    "virtualNetworkName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the existing virtual network. Its subnet must route to the targets and allow outbound HTTPS."
+      }
+    },
+    "virtualNetworkResourceGroup": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource group of the virtual network. Leave empty if it is this deployment's resource group."
+      }
+    },
+    "subnetName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of an empty subnet, at least /27, delegated to Microsoft.App/environments. Container Apps uses it for the environment alone."
+      }
+    },
+    "name": {
+      "type": "string",
+      "defaultValue": "edge-connector",
+      "maxLength": 32,
+      "metadata": {
+        "description": "Prefix for the names of everything this creates."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region. Defaults to the resource group's, which must be the virtual network's."
+      }
+    },
+    "connectorImage": {
+      "type": "string",
+      "defaultValue": "public.ecr.aws/s9u8g9q7/edge-connector@sha256:2473f9b660218932ec4f93b5651d7a64fb922748ec4df42a5e75a564717d2cee",
+      "metadata": {
+        "description": "Connector image, pinned by digest. Instalily sends a new one for each upgrade."
+      }
+    }
+  },
+  "variables": {
+    "subnetId": "[resourceId(if(empty(parameters('virtualNetworkResourceGroup')), resourceGroup().name, parameters('virtualNetworkResourceGroup')), 'Microsoft.Network/virtualNetworks/subnets', parameters('virtualNetworkName'), parameters('subnetName'))]",
+    "config": {
+      "hub": {
+        "address": "[parameters('hubAddress')]",
+        "connections": 2
+      },
+      "state_dir": "/var/lib/edge-connector",
+      "enrollment": {
+        "token_file": "/etc/edge-connector/token"
+      },
+      "allow": "[parameters('allow')]",
+      "health_listen": "127.0.0.1:8080"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[format('{0}-logs', parameters('name'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[format('edgec{0}', uniqueString(resourceGroup().id, parameters('name')))]",
+      "location": "[parameters('location')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "Standard_LRS"
+      },
+      "properties": {
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/fileServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name'))), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name'))))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/fileServices/shares",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name'))), 'default', 'state')]",
+      "properties": {
+        "shareQuota": 1
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name'))), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}-env', parameters('name'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('name'))), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('name'))), '2023-09-01').primarySharedKey]"
+          }
+        },
+        "vnetConfiguration": {
+          "infrastructureSubnetId": "[variables('subnetId')]",
+          "internal": true
+        },
+        "workloadProfiles": [
+          {
+            "name": "Consumption",
+            "workloadProfileType": "Consumption"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-logs', parameters('name')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments/storages",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}/{1}', format('{0}-env', parameters('name')), 'state')]",
+      "properties": {
+        "azureFile": {
+          "accountName": "[format('edgec{0}', uniqueString(resourceGroup().id, parameters('name')))]",
+          "accountKey": "[listKeys(resourceId('Microsoft.Storage/storageAccounts', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name')))), '2023-05-01').keys[0].value]",
+          "shareName": "state",
+          "accessMode": "ReadWrite"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name')))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/fileServices/shares', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name'))), 'default', 'state')]",
+        "[resourceId('Microsoft.Storage/storageAccounts', format('edgec{0}', uniqueString(resourceGroup().id, parameters('name'))))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[parameters('name')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name')))]",
+        "workloadProfileName": "Consumption",
+        "configuration": {
+          "activeRevisionsMode": "Single",
+          "secrets": [
+            {
+              "name": "config",
+              "value": "[string(variables('config'))]"
+            },
+            {
+              "name": "token",
+              "value": "[parameters('enrollmentToken')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "connector",
+              "image": "[parameters('connectorImage')]",
+              "args": [
+                "-config",
+                "/etc/edge-connector/config.yaml"
+              ],
+              "resources": {
+                "cpu": "[json('0.25')]",
+                "memory": "0.5Gi"
+              },
+              "volumeMounts": [
+                {
+                  "volumeName": "config",
+                  "mountPath": "/etc/edge-connector"
+                },
+                {
+                  "volumeName": "state",
+                  "mountPath": "/var/lib/edge-connector"
+                }
+              ]
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          },
+          "volumes": [
+            {
+              "name": "config",
+              "storageType": "Secret",
+              "secrets": [
+                {
+                  "secretRef": "config",
+                  "path": "config.yaml"
+                },
+                {
+                  "secretRef": "token",
+                  "path": "token"
+                }
+              ]
+            },
+            {
+              "name": "state",
+              "storageType": "AzureFile",
+              "storageName": "state",
+              "mountOptions": "uid=65532,gid=65532,dir_mode=0700,file_mode=0600"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('name')))]",
+        "[resourceId('Microsoft.App/managedEnvironments/storages', format('{0}-env', parameters('name')), 'state')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "containerAppName": {
+      "type": "string",
+      "value": "[parameters('name')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[format('edgec{0}', uniqueString(resourceGroup().id, parameters('name')))]"
+    },
+    "logAnalyticsWorkspaceName": {
+      "type": "string",
+      "value": "[format('{0}-logs', parameters('name'))]"
+    }
+  }
+}

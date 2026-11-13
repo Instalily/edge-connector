@@ -98,6 +98,42 @@ jobs:
       - name: Run
         run: test/e2e/run.sh
 
+  azure:
+    name: Azure template
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Bicep lint, and each azuredeploy.json matches its azuredeploy.bicep
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/bicep" https://github.com/Azure/bicep/releases/download/v0.31.92/bicep-linux-x64
+          echo "4ba96f90e767fc606f23bbbf60cf07ef3557665cc70b893172193edd86685815  $RUNNER_TEMP/bicep" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bicep"
+          for dir in deploy/azure deploy/azure-container-apps; do
+            "$RUNNER_TEMP/bicep" lint "$dir/azuredeploy.bicep"
+            "$RUNNER_TEMP/bicep" build "$dir/azuredeploy.bicep" --stdout > "$RUNNER_TEMP/azuredeploy.json"
+            if ! diff -u "$dir/azuredeploy.json" "$RUNNER_TEMP/azuredeploy.json"; then
+              echo "::error::$dir/azuredeploy.json is stale: rebuild it from azuredeploy.bicep (see $dir/README.md)"
+              exit 1
+            fi
+          done
+
+      - name: cloud-init schema
+        run: |
+          config='{"hub":{"address":"203.0.113.10:443","connections":2},"state_dir":"/var/lib/edge-connector","enrollment":{"token_file":"/etc/edge-connector/token"},"allow":[{"cidr":"10.1.2.3","ports":[1433]}],"health_listen":"127.0.0.1:8080"}'
+          sed -e 's#@@IMAGE@@#public.ecr.aws/example/edge-connector@sha256:0000#' \
+              -e "s#@@CONFIG@@#$config#" -e 's#@@TOKEN@@#example-token#' \
+            deploy/azure/cloud-init.yaml > "$RUNNER_TEMP/cloud-init.yaml"
+          if grep -nE '@@[A-Z]+@@' "$RUNNER_TEMP/cloud-init.yaml"; then
+            echo "::error::cloud-init.yaml has a placeholder the template doesn't fill"
+            exit 1
+          fi
+          docker run --rm -v "$RUNNER_TEMP/cloud-init.yaml:/c.yaml:ro" ubuntu:24.04 sh -c \
+            'apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq cloud-init >/dev/null && cloud-init schema -c /c.yaml'
+
   # Biome and Gitleaks: the organization requires both on every repository
   # through workflows in Instalily/standard, which is internal, and GitHub
   # doesn't run an internal repository's workflows for a public one. They run
