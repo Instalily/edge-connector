@@ -29,6 +29,11 @@ func Enroll(ctx context.Context, dial Dial, addr, serverName, token string, st S
 	if err != nil {
 		return fmt.Errorf("token: %w", err)
 	}
+	// Verification below is this package's own, so nothing else would refuse
+	// an empty name, which checks no name at all.
+	if serverName == "" {
+		return errors.New("enroll: the hub's server name is required")
+	}
 	var hubCA *x509.Certificate
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS13,
@@ -38,7 +43,7 @@ func Enroll(ctx context.Context, dial Dial, addr, serverName, token string, st S
 		// pool holds.
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			ca, err := pinnedCA(cs, claims.HubCA)
+			ca, err := pinnedCA(cs, claims.HubCA, serverName)
 			if err != nil {
 				return err
 			}
@@ -116,8 +121,13 @@ func exchange(ctx context.Context, dial Dial, addr string, cfg *tls.Config, alpn
 }
 
 // pinnedCA finds the CA certificate with fingerprint pin among those the hub
-// sent, and verifies the hub's certificate against it.
-func pinnedCA(cs tls.ConnectionState, pin string) (*x509.Certificate, error) {
+// sent, and verifies the hub's certificate against it and serverName.
+//
+// serverName is the configured name, a DNS name or an IP address, as
+// crypto/tls itself verifies. It is not cs.ServerName: that is the SNI the
+// client sent, which is empty when the hub is dialed by IP address, and an
+// empty name is not checked.
+func pinnedCA(cs tls.ConnectionState, pin, serverName string) (*x509.Certificate, error) {
 	if len(cs.PeerCertificates) == 0 {
 		return nil, errors.New("hub sent no certificate")
 	}
@@ -128,7 +138,7 @@ func pinnedCA(cs tls.ConnectionState, pin string) (*x509.Certificate, error) {
 		roots := x509.NewCertPool()
 		roots.AddCert(c)
 		_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
-			DNSName:   cs.ServerName,
+			DNSName:   serverName,
 			Roots:     roots,
 			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		})

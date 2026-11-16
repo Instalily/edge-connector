@@ -176,6 +176,34 @@ func TestEnrollRenewAndRestart(t *testing.T) {
 	})
 }
 
+// A hub dialed by IP address, as most are, must still hold a certificate for
+// that address: one from the pinned CA for some other name is not this hub.
+func TestEnrollRejectsHubCertificateForAnotherAddress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := newEnrollPKI(t)
+	srv, err := p.hubCA.Issue(pki.LeafOptions{CommonName: "hub", DNSNames: []string{"another-hub.example"}, Server: true, Validity: day})
+	must(t, err)
+	must(t, srv.Write(filepath.Join(p.dir, "hub.crt"), filepath.Join(p.dir, "hub.key"), p.hubCA.Cert))
+	h := startEnrollingHub(t, ctx, p, time.Hour, echoServer(t))
+	dial := func(ctx context.Context, addr string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	}
+	token := p.token(t, "connector-1", time.Now(), time.Hour)
+
+	for _, serverName := range []string{"127.0.0.1", "hub.example"} {
+		st := enroll.State{Dir: t.TempDir()}
+		err := enroll.Enroll(ctx, dial, h.TunnelAddr().String(), serverName, token, st)
+		var he *enroll.HubError
+		if err == nil || errors.As(err, &he) || !strings.Contains(err.Error(), "hub certificate") {
+			t.Fatalf("server name %s: got %v, want the hub's certificate refused", serverName, err)
+		}
+		if _, err := st.Certificate(); err == nil {
+			t.Fatalf("server name %s: a certificate was saved", serverName)
+		}
+	}
+}
+
 func TestEnrollmentRefusals(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -59,7 +59,10 @@ func (s State) CheckWritable() error {
 // Save stores a certificate and its key, replacing the previous pair in one
 // rename, and, when hubCA is not nil, the hub's CA.
 func (s State) Save(key *ecdsa.PrivateKey, cert *x509.Certificate, hubCA *x509.Certificate) error {
-	if !cert.PublicKey.(*ecdsa.PublicKey).Equal(&key.PublicKey) {
+	// The certificate is the hub's answer: check its key's type before using
+	// it, so that one for another kind of key is an error, not a panic.
+	pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !pub.Equal(&key.PublicKey) {
 		return errors.New("certificate does not match the key")
 	}
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {

@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -80,39 +81,66 @@ func (c *Connector) ensureCertificate(ctx context.Context) error {
 // renewLoop renews the certificate once two thirds of its lifetime has
 // passed. Tunnels pick up the new certificate when they next connect, which
 // the hub forces when the old one expires.
+//
+// A failure is retried with exponential backoff and jitter, as maintain
+// retries a tunnel. Without it, a connector whose renewals the hub refuses
+// (one removed from allowed_identities, say) would open a new connection to
+// the hub as fast as each refusal came back. No failure ends the loop: a
+// connector that stopped renewing would lose its tunnels when its
+// certificate expired, and stay down until restarted.
 func (c *Connector) renewLoop(ctx context.Context) {
+	const minBackoff, maxBackoff = time.Second, time.Minute
 	st := c.state()
+	backoff := minBackoff
 	for {
-		cert, err := st.Certificate()
-		if err != nil {
-			c.log.Error("cannot read enrolled certificate", "error", err)
+		wait, err := c.renewIfDue(ctx, st)
+		if ctx.Err() != nil {
 			return
 		}
-		lifetime := cert.NotAfter.Sub(cert.NotBefore)
-		renewAt := cert.NotBefore.Add(lifetime * 2 / 3)
-		// Check at least every minute, and often enough for short lifetimes.
-		wait := min(max(time.Until(renewAt), 0), time.Minute, max(lifetime/20, time.Second))
+		if err != nil {
+			wait = backoff/2 + rand.N(backoff/2)
+			c.log.Error("renewal failed", "error", err, "retry_in", wait.Round(time.Millisecond).String())
+			backoff = min(backoff*2, maxBackoff)
+		} else {
+			backoff = minBackoff
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-time.After(wait):
 		}
-		if time.Now().Before(renewAt) {
-			continue
-		}
-		if err := enroll.Renew(ctx, c.dialHub, c.cfg.Hub.Address, c.cfg.Hub.ServerName, st); err != nil {
-			c.log.Error("renewal failed", "error", err, "not_after", cert.NotAfter.UTC().Format(time.RFC3339))
-			if time.Now().After(cert.NotAfter) {
-				// Too late to renew: enroll again, if a token is still there.
-				if err := c.ensureCertificate(ctx); err != nil {
-					c.log.Error("re-enrollment failed", "error", err)
-				}
-			}
-			continue
-		}
-		next, _ := st.Certificate()
-		if next != nil {
-			c.log.Info("renewed", "identity", next.Subject.CommonName, "not_after", next.NotAfter.UTC().Format(time.RFC3339))
-		}
 	}
+}
+
+// renewIfDue renews the certificate if two thirds of its lifetime has passed,
+// and returns how long to wait before looking again.
+func (c *Connector) renewIfDue(ctx context.Context, st enroll.State) (time.Duration, error) {
+	cert, err := st.Certificate()
+	if err != nil {
+		return 0, fmt.Errorf("read enrolled certificate: %w", err)
+	}
+	lifetime := cert.NotAfter.Sub(cert.NotBefore)
+	// Look at least every minute, and often enough for short lifetimes.
+	interval := min(time.Minute, max(lifetime/20, time.Second))
+	renewAt := cert.NotBefore.Add(lifetime * 2 / 3)
+	if until := time.Until(renewAt); until > 0 {
+		return min(until, interval), nil
+	}
+	if err := enroll.Renew(ctx, c.dialHub, c.cfg.Hub.Address, c.cfg.Hub.ServerName, st); err != nil {
+		notAfter := cert.NotAfter.UTC().Format(time.RFC3339)
+		if time.Now().Before(cert.NotAfter) {
+			return 0, fmt.Errorf("certificate expires %s: %w", notAfter, err)
+		}
+		// Too late to renew: enroll again, if a token is still there.
+		if eerr := c.ensureCertificate(ctx); eerr != nil {
+			return 0, fmt.Errorf("certificate expired %s: %w; enrolling again: %w", notAfter, err, eerr)
+		}
+		return interval, nil
+	}
+	if next, err := st.Certificate(); err == nil {
+		c.log.Info("renewed", "identity", next.Subject.CommonName, "not_after", next.NotAfter.UTC().Format(time.RFC3339))
+	}
+	// Not straight back, even after a success: to a clock far ahead of the
+	// hub's, every new certificate looks due at once.
+	return interval, nil
 }
