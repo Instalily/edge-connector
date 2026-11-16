@@ -72,7 +72,9 @@ Each `allow` entry is a `host` or a `cidr`, with `ports`.
 When a target is a name that no `host` rule matches, the connector resolves it
 with the customer's DNS. It then dials only the resolved addresses that fall
 inside a `cidr` rule for that port, so a later lookup can't swap in another
-address. A target that matches nothing is denied.
+address. A target that matches nothing is denied. So is such a name when it
+doesn't resolve, with the same `denied`, so the hub can't ask the connector
+which names exist in the customer's DNS.
 
 Run `connector -config config.yaml -check` to print the rules the connector
 will enforce.

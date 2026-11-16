@@ -359,14 +359,18 @@ func (c *Connector) serve(ctx context.Context, stream *yamux.Stream) {
 	}
 
 	addrs, err := c.allow.Resolve(ctx, host, uint16(port))
-	if errors.Is(err, allowlist.ErrDenied) {
-		log.Warn("stream refused", "reason", protocol.ErrDenied)
-		reply(stream, protocol.ErrDenied)
-		return
-	}
 	if err != nil {
-		log.Warn("stream refused", "reason", protocol.ErrDialFailed, "error", err)
-		reply(stream, protocol.ErrDialFailed)
+		// The hub is told "denied" whatever the reason. A name that matches
+		// no hostname rule is allowed only if it resolves into a CIDR rule.
+		// If one that failed to resolve got a different answer from one that
+		// resolved elsewhere, the hub could ask about any name and learn
+		// which exist in the customer's DNS. The log here says which it was.
+		if errors.Is(err, allowlist.ErrDenied) {
+			log.Warn("stream refused", "reason", protocol.ErrDenied)
+		} else {
+			log.Warn("stream refused", "reason", protocol.ErrDenied, "error", err)
+		}
+		reply(stream, protocol.ErrDenied)
 		return
 	}
 	target, err := c.dial(ctx, addrs)
