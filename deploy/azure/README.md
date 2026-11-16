@@ -43,8 +43,11 @@ The customer needs:
 - the allowlist agreed with Instalily, as JSON, for example
   `[{"cidr": "10.1.2.3", "ports": [1433]}]`;
 - the name of a virtual network and subnet that route to the targets and
-  allow outbound HTTPS to the hub, `public.ecr.aws` and the Ubuntu package
-  mirrors.
+  allow outbound HTTPS to the hub, `public.ecr.aws`, the Ubuntu package
+  mirrors, and `d2glxqk2uabbnd.cloudfront.net`, the CloudFront host ECR Public
+  serves the image's layers from (observed 2026-11-16). A firewall that allows
+  only `public.ecr.aws` lets the image's manifest through and blocks its
+  layers.
 
 In the portal, open **Deploy a custom template**, choose **Build your own
 template in the editor**, **Load file** `azuredeploy.json`, **Save**, then fill

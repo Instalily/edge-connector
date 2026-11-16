@@ -22,14 +22,38 @@ The configuration and the token are Container Apps secrets, mounted as files.
 - **A dedicated subnet**: empty, at least `/27`, delegated to
   `Microsoft.App/environments`, in a virtual network that routes to the
   targets. Container Apps uses it for this environment alone.
-- **Outbound** from that subnet: TCP 443 to the hub and `public.ecr.aws`, and
-  TCP 445 (SMB) to Azure Storage (`*.file.core.windows.net`) for the share. If
-  a firewall sits on that path, it also needs the endpoints Microsoft lists for
-  Container Apps environments.
+- **The network rules below** on that subnet.
 - **Storage that allows shared-key access.** Container Apps mounts Azure Files
-  with the account key. A policy that disables shared keys, or the storage
-  account's public endpoint, blocks the mount; use the VM template then.
+  with the account key, so a policy that disables shared keys blocks the
+  mount; use the VM template then. A private endpoint on the storage account
+  (`file` sub-resource, private DNS zone `privatelink.file.core.windows.net`
+  linked to the virtual network) is supported by Azure Files, but untested with
+  this template.
 - The hub address and a token from Instalily, and the agreed allowlist.
+
+### Network rules
+
+Inbound, nothing for the connector: the app has no ingress. Keep Azure's default
+`AllowAzureLoadBalancerInBound` NSG rule (or an equivalent) under any deny-all,
+because Azure's health probes reach the environment on TCP 30000-32767.
+
+Outbound from the subnet:
+
+| Destination | Port | Why |
+| --- | --- | --- |
+| The hub's IP | TCP 443 | The tunnel. |
+| The allowlisted targets | Their ports | Connections the hub asks for. |
+| `public.ecr.aws` and `d2glxqk2uabbnd.cloudfront.net` | TCP 443 | The connector image. ECR Public serves the image's layers from that CloudFront host (observed 2026-11-16). Neither has fixed IPs: an NSG needs the `Internet` service tag, a firewall these names. |
+| Service tag `Storage.<region>` | TCP 445 | The state share (SMB). |
+| Service tags `MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty` | TCP 443 | Container Apps' system containers. |
+| Service tag `AzureMonitor` | TCP 443 | Logs to Log Analytics. |
+| `168.63.129.16` | TCP and UDP 53 | Azure DNS. Never deny it. |
+| The subnet itself | Any | Traffic within the environment. |
+
+Through Azure Firewall, also allow `mcr.microsoft.com`, `*.data.mcr.microsoft.com`,
+`packages.aks.azure.com` and `acs-mirror.azureedge.net` on TCP 443, Microsoft's
+list for every Container Apps environment. Microsoft's reference:
+[Securing a custom VNet with network security groups](https://learn.microsoft.com/en-us/azure/container-apps/firewall-integration).
 
 ## Preparing a customer's template
 
