@@ -75,7 +75,7 @@ var cloudInit = replace(
   enrollmentToken
 )
 
-resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
+resource nsg 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
   name: '${vmName}-nsg'
   location: location
   properties: {
