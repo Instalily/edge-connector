@@ -11,7 +11,11 @@ one portal form; there is no machine to sign in to or patch.
     connector's `state_dir`, so the key it generates and its certificate
     survive restarts;
   - a Log Analytics workspace for the connector's logs, which are the audit
-    trail of every connection.
+    trail of every connection;
+  - optionally, the subnet itself, with a network security group holding the
+    rules below (see Creating the subnet).
+- [`subnet.bicep`](subnet.bicep): the subnet, deployed into the virtual
+  network's resource group.
 - [`azuredeploy.json`](azuredeploy.json): the same template compiled to ARM
   JSON, for the portal. Don't edit it by hand; CI checks that it matches.
 
@@ -21,15 +25,42 @@ The configuration and the token are Container Apps secrets, mounted as files.
 
 - **A dedicated subnet**: empty, at least `/27`, delegated to
   `Microsoft.App/environments`, in a virtual network that routes to the
-  targets. Container Apps uses it for this environment alone.
-- **Outbound** from that subnet: TCP 443 to the hub and `public.ecr.aws`, and
-  TCP 445 (SMB) to Azure Storage (`*.file.core.windows.net`) for the share. If
-  a firewall sits on that path, it also needs the endpoints Microsoft lists for
-  Container Apps environments.
+  targets. Container Apps uses it for this environment alone. The customer
+  creates it, or gives a free range and lets the template create it (see
+  Creating the subnet).
+- **The network rules below** on that subnet, if outbound traffic is
+  restricted. Azure's default rules already allow all of them.
 - **Storage that allows shared-key access.** Container Apps mounts Azure Files
-  with the account key. A policy that disables shared keys, or the storage
-  account's public endpoint, blocks the mount; use the VM template then.
+  with the account key, so a policy that disables shared keys blocks the
+  mount; use the VM template then. A private endpoint on the storage account
+  (`file` sub-resource, private DNS zone `privatelink.file.core.windows.net`
+  linked to the virtual network) is supported by Azure Files, but untested with
+  this template.
 - The hub address and a token from Instalily, and the agreed allowlist.
+
+### Network rules
+
+Inbound, nothing for the connector: the app has no ingress. Keep Azure's default
+`AllowAzureLoadBalancerInBound` NSG rule (or an equivalent) under any deny-all,
+because Azure's health probes reach the environment on TCP 30000-32767.
+
+Outbound from the subnet:
+
+| Destination | Port | Why |
+| --- | --- | --- |
+| The hub's IP | TCP 443 | The tunnel. |
+| The allowlisted targets | Their ports | Connections the hub asks for. |
+| `public.ecr.aws` and `d2glxqk2uabbnd.cloudfront.net` | TCP 443 | The connector image. ECR Public serves the image's layers from that CloudFront host (observed 2026-11-16). Neither has fixed IPs: an NSG needs the `Internet` service tag, a firewall these names. |
+| Service tag `Storage.<region>` | TCP 445 | The state share (SMB). |
+| Service tags `MicrosoftContainerRegistry`, `AzureFrontDoor.FirstParty` | TCP 443 | Container Apps' system containers. |
+| Service tag `AzureMonitor` | TCP 443 | Logs to Log Analytics. |
+| `168.63.129.16` | TCP and UDP 53 | Azure DNS. Never deny it. |
+| The subnet itself | Any | Traffic within the environment. |
+
+Through Azure Firewall, also allow `mcr.microsoft.com`, `*.data.mcr.microsoft.com`,
+`packages.aks.azure.com` and `acs-mirror.azureedge.net` on TCP 443, Microsoft's
+list for every Container Apps environment. Microsoft's reference:
+[Securing a custom VNet with network security groups](https://learn.microsoft.com/en-us/azure/container-apps/firewall-integration).
 
 ## Preparing a customer's template
 
@@ -67,9 +98,33 @@ The token stays in the `token` secret after enrollment. It expires within its
 lifetime (24 hours by default), and the connector reads it only when it has no
 valid certificate.
 
+### Creating the subnet
+
+Fill in **Subnet Address Prefix** with a free range in the virtual network, at
+least `/27` (e.g. `10.20.3.0/27`), and **Subnet Name** with a new name. The
+template then creates:
+
+- the subnet, delegated to `Microsoft.App/environments`, in the virtual
+  network's resource group;
+- `<name>-nsg`, attached to it, allowing exactly the outbound rules above: the
+  hub, each allowlisted target (a `cidr` entry as itself, a `host` entry as the
+  `VirtualNetwork` tag), the image, the share, Container Apps' own needs, and
+  Azure's load-balancer probes inbound.
+
+**Deny Other Outbound** adds a final rule denying everything else, so the subnet
+reaches only what those rules allow. It's off by default: the image rule must
+allow HTTPS to the whole `Internet` tag, since its hosts have no fixed IPs, and
+a dependency Microsoft doesn't list would break the environment only once it's
+deployed.
+
+Creating the subnet needs permission to change the virtual network, and
+**Hub Address** as `IP:port`, since a security group rule takes an address.
+Leave **Subnet Address Prefix** empty to use an existing subnet instead.
+
 ## Tested
 
-- The template compiles and lints; it has not yet been deployed in Azure.
+- The template compiles and lints; it has not yet been deployed in Azure,
+  with or without creating the subnet.
 - The connector's state on Azure Files was tested on 2026-11-13 by mounting
   an SMB 3.1.1 share without Unix extensions, with this template's mount
   options, as `state_dir`, against a test hub issuing 3-minute certificates.

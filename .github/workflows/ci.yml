@@ -120,6 +120,7 @@ jobs:
               exit 1
             fi
           done
+          "$RUNNER_TEMP/bicep" lint deploy/azure-container-apps/subnet.bicep
 
       - name: cloud-init schema
         run: |
