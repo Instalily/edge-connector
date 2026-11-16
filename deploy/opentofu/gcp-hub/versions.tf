@@ -11,7 +11,7 @@ terraform {
     # uses the same credentials as google.
     google-beta = {
       source  = "hashicorp/google-beta"
-      version = ">= 6.50.0, < 8.0.0"
+      version = "< 9.0.0"
     }
   }
 }
